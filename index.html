@@ -27,6 +27,7 @@
     --bad:#f07171; --bad-bg:#2c1616; --chip:#212734; --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.35);
   }
   *{box-sizing:border-box}
+  [hidden]{display:none!important}
   body{
     margin:0; background:var(--bg); color:var(--ink);
     font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
@@ -484,8 +485,15 @@ var view = document.getElementById('view');
 function render(){
   updateChip();
   document.getElementById('btnOut').hidden = !S.session;
+
+  /* Veritabanı bilgisi (durum rozeti, ayar düğmesi, bağlantı uyarısı)
+     yalnızca yönetici oturumunda görünür. */
+  var yonetici = !!(S.session && S.session.type==='admin');
+  document.getElementById('dbChip').hidden = !yonetici;
+  document.getElementById('btnDb').hidden  = !yonetici;
+
   var b = document.getElementById('banner');
-  if(S.dbError){
+  if(S.dbError && yonetici){
     b.hidden = false;
     b.innerHTML = '<div class="note bad-note"><b>Firebase bağlantısı kurulamadı.</b><br>'+esc(S.dbError)+
       '<div class="row" style="margin-top:10px">'+
