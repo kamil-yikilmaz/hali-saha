@@ -632,6 +632,8 @@ function adminUsers(el){
           (u.oylamaKilidi ? ' <span class="chip good">Kapattı</span>' : '')+'</td>'+
         '<td style="text-align:right">'+
           (u.oylamaKilidi ? '<button class="btn sm" data-unlock="'+u.uid+'">Oylamasını aç</button> ' : '')+
+          '<button class="btn sm" data-reset="'+u.uid+'" title="Bu oyuncunun verdiği oyları siler"'+
+            (given===0 && !u.oylamaKilidi ? ' disabled' : '')+'>Oyunu sıfırla</button> '+
           '<button class="btn sm" data-rn="'+u.uid+'">Adı değiştir</button> '+
           '<button class="btn sm" data-pw="'+u.uid+'">Şifre</button> '+
           '<button class="btn sm danger" data-del="'+u.uid+'">Sil</button></td>'+
@@ -674,6 +676,23 @@ function adminUsers(el){
         var V = votes();
         for(var v in V){ if(V[v] && V[v][id]!==undefined) await dbDelete('votes/'+v+'/'+id); }
         await refresh(); toast('Silindi.'); render();
+      }catch(e){ toast(e.message,'bad'); }
+    };
+  });
+  Array.prototype.forEach.call(el.querySelectorAll('[data-reset]'), function(b){
+    b.onclick = async function(){
+      if(b.disabled) return;
+      var id = b.getAttribute('data-reset');
+      var u = users().find(function(x){ return x.uid===id; });
+      if(!u) return;
+      var row = votes()[id]||{};
+      var verilen = users().filter(function(t){ return t.uid!==id && oyPuan(row,t.uid)>=1; }).length;
+      if(!confirm(u.username+' oyuncusunun verdiği '+verilen+' oy ve açıklamaları silinecek, '+
+                  'oylaması sıfırdan açılacak.\n\nBu oyuncuya başkalarının verdiği oylar korunur. Devam edilsin mi?')) return;
+      try{
+        await dbDelete('votes/'+id);
+        if(u.oylamaKilidi) await dbDelete('users/'+id+'/oylamaKilidi');
+        await refresh(); toast(u.username+' için oylama sıfırlandı.'); render();
       }catch(e){ toast(e.message,'bad'); }
     };
   });
@@ -774,7 +793,7 @@ function adminVotes(el){
     (us.length===0 ? '<div class="empty">Kullanıcı yok.</div>' :
     '<div class="tblwrap"><table><thead><tr><th>Veren \\ Alan</th>'+
       us.map(function(u){ return '<th class="num">'+esc(u.username.split('.')[0])+'</th>'; }).join('')+
-      '<th class="num">Girilen</th></tr></thead><tbody>'+
+      '<th class="num">Girilen</th><th></th></tr></thead><tbody>'+
       us.map(function(v){
         var row = V[v.uid]||{}, filled=0;
         return '<tr><td><b>'+esc(v.username)+'</b></td>'+
@@ -788,9 +807,26 @@ function adminVotes(el){
             }
             return '<td class="num muted">·</td>';
           }).join('')+
-          '<td class="num"><b>'+filled+'</b></td></tr>';
+          '<td class="num"><b>'+filled+'</b></td>'+
+          '<td style="text-align:right"><button class="btn sm" data-reset2="'+v.uid+'"'+
+            (filled===0 && !v.oylamaKilidi ? ' disabled' : '')+'>Sıfırla</button></td></tr>';
       }).join('')+
     '</tbody></table></div>');
+
+  Array.prototype.forEach.call(el.querySelectorAll('[data-reset2]'), function(b){
+    b.onclick = async function(){
+      if(b.disabled) return;
+      var id = b.getAttribute('data-reset2');
+      var u = us.find(function(x){ return x.uid===id; });
+      if(!u) return;
+      if(!confirm(u.username+' oyuncusunun verdiği tüm oylar ve açıklamalar silinecek, oylaması sıfırdan açılacak. Devam edilsin mi?')) return;
+      try{
+        await dbDelete('votes/'+id);
+        if(u.oylamaKilidi) await dbDelete('users/'+id+'/oylamaKilidi');
+        await refresh(); toast(u.username+' için oylama sıfırlandı.'); render();
+      }catch(e){ toast(e.message,'bad'); }
+    };
+  });
 
   el.querySelector('#toggleV').onclick = async function(){
     try{
