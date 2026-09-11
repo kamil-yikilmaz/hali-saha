@@ -375,7 +375,8 @@ function users(){
   var u = S.data.users || {};
   return Object.keys(u).map(function(id){
     var o = u[id]||{};
-    return {uid:id, username:o.username||id, mevki:o.mevki||'', createdAt:o.createdAt||0, passHash:o.passHash||''};
+    return {uid:id, username:o.username||id, mevki:o.mevki||'', createdAt:o.createdAt||0,
+            passHash:o.passHash||'', oylamaKilidi:o.oylamaKilidi||0};
   }).sort(function(a,b){ return (a.createdAt||0)-(b.createdAt||0); });
 }
 function votes(){ return S.data.votes || {}; }
@@ -627,8 +628,10 @@ function adminUsers(el){
         '<td>'+(varsayilanSifreMi(u.passHash)
                   ? '<span class="chip warn"><span class="dot"></span>Geçici</span>'
                   : '<span class="chip good"><span class="dot"></span>Kendi belirledi</span>')+'</td>'+
-        '<td class="num">'+given+' / '+p.expectedPer+'</td>'+
+        '<td class="num">'+given+' / '+p.expectedPer+
+          (u.oylamaKilidi ? ' <span class="chip good">Kapattı</span>' : '')+'</td>'+
         '<td style="text-align:right">'+
+          (u.oylamaKilidi ? '<button class="btn sm" data-unlock="'+u.uid+'">Oylamasını aç</button> ' : '')+
           '<button class="btn sm" data-rn="'+u.uid+'">Adı değiştir</button> '+
           '<button class="btn sm" data-pw="'+u.uid+'">Şifre</button> '+
           '<button class="btn sm danger" data-del="'+u.uid+'">Sil</button></td>'+
@@ -671,6 +674,16 @@ function adminUsers(el){
         var V = votes();
         for(var v in V){ if(V[v] && V[v][id]!==undefined) await dbDelete('votes/'+v+'/'+id); }
         await refresh(); toast('Silindi.'); render();
+      }catch(e){ toast(e.message,'bad'); }
+    };
+  });
+  Array.prototype.forEach.call(el.querySelectorAll('[data-unlock]'), function(b){
+    b.onclick = async function(){
+      var id = b.getAttribute('data-unlock');
+      if(!confirm('Bu oyuncunun oylaması yeniden açılsın mı? Oylarını değiştirebilir hâle gelir.')) return;
+      try{
+        await dbDelete('users/'+id+'/oylamaKilidi');
+        await refresh(); toast('Oylaması yeniden açıldı.'); render();
       }catch(e){ toast(e.message,'bad'); }
     };
   });
@@ -750,6 +763,7 @@ function adminVotes(el){
     '<div class="row" style="gap:16px">'+
       '<div style="flex:1;min-width:200px"><div class="bar"><i style="width:'+p.pct+'%"></i></div></div>'+
       '<span class="small muted">'+p.done+' / '+p.total+' oy girildi (%'+p.pct+')</span>'+
+      '<span class="chip">Oylamasını kapatan: '+us.filter(function(u){ return !!u.oylamaKilidi; }).length+' / '+us.length+'</span>'+
       '<button class="btn sm danger" id="resetV">Oyları sıfırla</button>'+
     '</div>'+
   '</div>'+
@@ -785,9 +799,14 @@ function adminVotes(el){
     }catch(e){ toast(e.message,'bad'); }
   };
   el.querySelector('#resetV').onclick = async function(){
-    if(!confirm('Verilen tüm oylar silinecek. Emin misiniz?')) return;
-    try{ await dbDelete('votes'); await refresh(); toast('Oylar sıfırlandı.'); render(); }
-    catch(e){ toast(e.message,'bad'); }
+    if(!confirm('Verilen tüm oylar silinecek ve oyuncuların oylamaları yeniden açılacak. Emin misiniz?')) return;
+    try{
+      await dbDelete('votes');
+      for(var i=0;i<us.length;i++){
+        if(us[i].oylamaKilidi) await dbDelete('users/'+us[i].uid+'/oylamaKilidi');
+      }
+      await refresh(); toast('Oylar sıfırlandı.'); render();
+    }catch(e){ toast(e.message,'bad'); }
   };
 }
 
@@ -1008,6 +1027,7 @@ function adminSettings(el){
       '<b>Anonimlik</b><span>Kim kime kaç verdi yalnızca yöneticide görünür</span>'+
       '<b>Şifre değişimi</b><span>Oyuncular kendi şifrelerini giriş yaptıktan sonra değiştirebilir</span>'+
       '<b>Geçici şifre</b><span>'+esc(VARSAYILAN_SIFRE)+' — bu şifre değiştirilmeden oy kullanılamaz</span>'+
+      '<b>Kendi kilidi</b><span>Oyuncu istatistikleri görüntülerse kendi oylaması kapanır; yalnızca yönetici yeniden açabilir</span>'+
     '</div>'+
   '</div>';
   el.querySelector('#pwf').onsubmit = async function(e){
@@ -1023,6 +1043,85 @@ function adminSettings(el){
   };
 }
 
+/* Oyuncunun göreceği istatistik ekranı — yönetici Sonuçlar sayfasının
+   kim-kime bilgisi olmayan hâli. */
+function istatistikBlogu(meUid){
+  var R = results(), pr = progress(), us = users();
+  var ortalamasiOlan = R.filter(function(r){ return r.avg!==null; });
+  var genel = ortalamasiOlan.length
+    ? ortalamasiOlan.reduce(function(a,b){ return a+b.avg; },0)/ortalamasiOlan.length : null;
+  var tamamlayan = us.filter(function(u){
+    var row = votes()[u.uid]||{};
+    return us.filter(function(t){ return t.uid!==u.uid && oyPuan(row,t.uid)>=1; }).length === Math.max(us.length-1,0);
+  }).length;
+
+  var html =
+  '<div class="card">'+
+    '<h2>İstatistikler</h2>'+
+    '<p class="small muted" style="margin-top:4px">Her oyuncunun aldığı oyların ortalaması. Kimin kime kaç verdiği gösterilmez.</p>'+
+    '<div class="sep"></div>'+
+    '<div class="row" style="gap:10px;margin-bottom:14px">'+
+      '<span class="chip">Oyuncu: '+us.length+'</span>'+
+      '<span class="chip">Oylamasını bitiren: '+tamamlayan+' / '+us.length+'</span>'+
+      '<span class="chip">Katılım: %'+pr.pct+'</span>'+
+      '<span class="chip">Genel ortalama: '+fmt(genel)+'</span>'+
+    '</div>'+
+    resultsTable(R, true)+
+    '<div class="sep"></div>'+
+    '<h3 style="margin-bottom:10px">Mevkiye göre</h3>'+ mevkiBloklari(R, true)+
+    (pr.pct<100 ? '<div class="note" style="margin-top:14px">Herkes oylamasını bitirmedi; ortalamalar şu ana kadar girilen oylarla hesaplandı ve diğerleri oyladıkça değişecek.</div>' : '')+
+  '</div>';
+
+  var bana = gelenAciklamalar(meUid);
+  if(bana.length){
+    html +=
+    '<div class="card">'+
+      '<h2>Size yazılan açıklamalar</h2>'+
+      '<p class="small muted" style="margin-top:4px">Kimin yazdığı gösterilmez.</p>'+
+      '<div class="sep"></div>'+
+      bana.map(function(c){
+        return '<div class="qt">'+
+          '<div class="row" style="gap:8px;margin-bottom:4px"><span class="qbadge">'+c.puan+'</span></div>'+
+          '<p>'+esc(c.aciklama)+'</p>'+
+        '</div>';
+      }).join('')+
+    '</div>';
+  }
+  return html;
+}
+
+/* Oyuncu kendi oylamasını kapatmak istediğinde çıkan uyarı */
+function kapatmaUyarisi(uid, sonra){
+  var m = document.createElement('div');
+  m.className = 'modal';
+  m.innerHTML =
+  '<div class="card">'+
+    '<h2>Oylamanız kapatılacak</h2>'+
+    '<div class="sep"></div>'+
+    '<div class="note bad-note" style="margin-bottom:0">'+
+      'İstatistikleri gördüğünüz anda <b>oylamanız kesin olarak kapanır</b>.<br>'+
+      'Bundan sonra hiçbir oyunuzu ve açıklamanızı değiştiremezsiniz.'+
+    '</div>'+
+    '<p class="small muted" style="margin-top:12px">Devam etmek istiyor musunuz?</p>'+
+    '<div class="row" style="justify-content:flex-end;margin-top:16px">'+
+      '<button class="btn" id="k_hayir">Vazgeç, oylamaya dönüyorum</button>'+
+      '<button class="btn primary" id="k_evet">Evet, oylamamı kapat ve göster</button>'+
+    '</div>'+
+  '</div>';
+  document.body.appendChild(m);
+  m.onclick = function(e){ if(e.target===m) m.remove(); };
+  m.querySelector('#k_hayir').onclick = function(){ m.remove(); };
+  m.querySelector('#k_evet').onclick = async function(){
+    try{
+      await dbWrite('users/'+uid+'/oylamaKilidi', Date.now());
+      await refresh();
+      m.remove();
+      toast('Oylamanız kapatıldı.');
+      sonra();
+    }catch(e){ toast(e.message,'bad'); }
+  };
+}
+
 /* ----- Kullanıcı paneli ----- */
 function renderUser(){
   var me = S.session, us = users(), others = us.filter(function(u){ return u.uid!==me.uid; });
@@ -1030,6 +1129,7 @@ function renderUser(){
   var given = others.filter(function(u){ return oyPuan(myRow,u.uid)>=1; }).length;
   var open = votingOpen();
   var meUser = us.find(function(u){ return u.uid===me.uid; }) || {mevki:''};
+  var kilitli = !!meUser.oylamaKilidi;
 
   /* Geçici şifre hâlâ duruyorsa oylamaya geçilmez. */
   if(meUser.passHash && varsayilanSifreMi(meUser.passHash)){
@@ -1070,11 +1170,14 @@ function renderUser(){
     '<div class="row" style="justify-content:space-between">'+
       '<div>'+
         '<h2>Merhaba, '+esc(me.username)+'</h2>'+
-        '<p class="small muted" style="margin-top:4px">Kendiniz dışındaki '+others.length+' oyuncuyu 1–10 arasında oyluyorsunuz.</p>'+
+        '<p class="small muted" style="margin-top:4px">'+
+          (kilitli ? 'Oylamanızı tamamladınız. Aşağıda güncel istatistikleri görüyorsunuz.'
+                   : 'Kendiniz dışındaki '+others.length+' oyuncuyu 1–10 arasında oyluyorsunuz.')+'</p>'+
         '<div style="margin-top:8px">'+mevkiChip(meUser.mevki)+'</div>'+
       '</div>'+
       '<div class="row">'+
-        '<span class="chip '+(open?'good':'bad')+'"><span class="dot"></span>'+(open?'Oylama açık':'Oylama kapalı')+'</span>'+
+        '<span class="chip '+(kilitli||!open?'bad':'good')+'"><span class="dot"></span>'+
+          (kilitli ? 'Oylamanız kapandı' : (open ? 'Oylama açık' : 'Oylama kapalı'))+'</span>'+
         '<button class="btn sm" id="myPw">Şifremi değiştir</button>'+
       '</div>'+
     '</div>'+
@@ -1083,33 +1186,28 @@ function renderUser(){
       '<div style="flex:1;min-width:180px"><div class="bar"><i id="uprog" style="width:'+(others.length?Math.round(given/others.length*100):0)+'%"></i></div></div>'+
       '<span class="small muted" id="uprogtxt">'+given+' / '+others.length+' oy verildi</span>'+
     '</div>'+
+    (kilitli || !open || !others.length ? '' :
+      '<div class="sep"></div>'+
+      '<div class="row" style="justify-content:space-between;gap:10px">'+
+        '<span class="small muted" id="statshint">'+
+          (given===others.length
+            ? 'Tüm oylarınızı verdiniz. İstatistikleri görürseniz oylamanız kapanır.'
+            : 'İstatistikleri görebilmek için önce herkesi oylamanız gerekiyor.')+
+        '</span>'+
+        '<button class="btn primary" id="statsBtn"'+(given===others.length?'':' disabled')+'>İstatistikleri gör</button>'+
+      '</div>')+
   '</div>';
 
-  if(!open){
-    var R = results();
+  if(kilitli || !open){
     html +=
-    '<div class="card">'+
-      '<h2>Sonuç listesi</h2>'+
-      '<p class="small muted" style="margin-top:4px">Oylama kapandı. Aşağıdaki ortalamalar kişi başına '+Math.max(us.length-1,0)+' oydan hesaplanmıştır. Oylar anonimdir.</p>'+
-      '<div class="sep"></div>'+ resultsTable(R, false)+
-      '<div class="sep"></div>'+
-      '<h3 style="margin-bottom:10px">Mevkiye göre</h3>'+ mevkiBloklari(R, false)+
-    '</div>';
-    var bana = gelenAciklamalar(me.uid);
-    if(bana.length){
-      html +=
-      '<div class="card">'+
-        '<h2>Size yazılan açıklamalar</h2>'+
-        '<p class="small muted" style="margin-top:4px">Kimin yazdığı gösterilmez.</p>'+
-        '<div class="sep"></div>'+
-        bana.map(function(c){
-          return '<div class="qt">'+
-            '<div class="row" style="gap:8px;margin-bottom:4px"><span class="qbadge">'+c.puan+'</span></div>'+
-            '<p>'+esc(c.aciklama)+'</p>'+
-          '</div>';
-        }).join('')+
-      '</div>';
-    }
+    '<div class="card" style="padding:14px 18px">'+
+      '<div class="note'+(kilitli?'':' ')+'" style="margin:0">'+
+        (kilitli
+          ? '<b>Oylamanız kapatıldı.</b> İstatistikleri görüntülediğiniz için oylarınız kesinleşti ve değiştirilemez.'
+          : '<b>Oylama yönetici tarafından kapatıldı.</b> Aşağıdaki sonuçlar kesin sonuçlardır.')+
+      '</div>'+
+    '</div>'+
+    istatistikBlogu(me.uid);
   }else if(!others.length){
     html += '<div class="card"><div class="empty">Oylanacak başka kullanıcı yok.</div></div>';
   }else{
@@ -1139,12 +1237,24 @@ function renderUser(){
   var pwBtn = view.querySelector('#myPw');
   if(pwBtn) pwBtn.onclick = function(){ sifreModal(me.uid); };
 
+  var sBtn = view.querySelector('#statsBtn');
+  if(sBtn) sBtn.onclick = function(){
+    if(sBtn.disabled) return;
+    kapatmaUyarisi(me.uid, function(){ render(); });
+  };
+
   function ilerlemeGuncelle(){
     var row = (votes()[me.uid])||{};
     var n = others.filter(function(u){ return oyPuan(row,u.uid)>=1; }).length;
     var bar = document.getElementById('uprog'), txt = document.getElementById('uprogtxt');
     if(bar) bar.style.width = (others.length?Math.round(n/others.length*100):0)+'%';
     if(txt) txt.textContent = n+' / '+others.length+' oy verildi';
+    var btn = document.getElementById('statsBtn'), ipucu = document.getElementById('statshint');
+    var tamam = others.length>0 && n===others.length;
+    if(btn) btn.disabled = !tamam;
+    if(ipucu) ipucu.textContent = tamam
+      ? 'Tüm oylarınızı verdiniz. İstatistikleri görürseniz oylamanız kapanır.'
+      : 'İstatistikleri görebilmek için önce herkesi oylamanız gerekiyor.';
   }
 
   Array.prototype.forEach.call(view.querySelectorAll('.sc'), function(b){
