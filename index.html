@@ -248,6 +248,10 @@ var DEFAULT_URL = 'https://halisaha-8913e-default-rtdb.europe-west1.firebasedata
 
 /* Mevkiler — sıralama bu dizideki sıraya göre (kaleden ileriye) yapılır */
 var MEVKILER = ['Kaleci','Defans','Orta Saha','Forvet'];
+
+/* Yöneticinin verdiği geçici şifre. Oyuncu bunu değiştirmeden oy kullanamaz. */
+var VARSAYILAN_SIFRE = '123';
+function varsayilanSifreMi(passHash){ return passHash === hashPass(VARSAYILAN_SIFRE); }
 var MEVKI_SINIF = {'Kaleci':'pos-k','Defans':'pos-d','Orta Saha':'pos-o','Forvet':'pos-f'};
 function mevkiChip(m){
   var c = MEVKI_SINIF[m] || '';
@@ -586,11 +590,11 @@ function adminUsers(el){
   el.innerHTML =
   '<div class="card">'+
     '<h2>Yeni kullanıcı oluştur</h2>'+
-    '<p class="small muted" style="margin-top:4px">Kullanıcı adı, şifre ve mevki (Kaleci / Defans / Orta Saha / Forvet) ile kayıt açılır.</p>'+
+    '<p class="small muted" style="margin-top:4px">Geçici şifre <b class="mono">'+esc(VARSAYILAN_SIFRE)+'</b> bırakılırsa oyuncu ilk girişinde kendi şifresini belirlemeden oy kullanamaz.</p>'+
     '<div class="sep"></div>'+
     '<form id="nu" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr));align-items:end">'+
       '<div><label class="f">Kullanıcı adı</label><input type="text" id="nu_u" required placeholder="ör. ahmet.yilmaz"></div>'+
-      '<div><label class="f">Şifre</label><input type="text" id="nu_p" required placeholder="ör. 1234"></div>'+
+      '<div><label class="f">Geçici şifre</label><input type="text" id="nu_p" required value="'+esc(VARSAYILAN_SIFRE)+'"></div>'+
       '<div><label class="f">Mevki</label><select id="nu_m" required>'+
         MEVKILER.map(function(m){ return '<option value="'+esc(m)+'">'+esc(m)+'</option>'; }).join('')+
       '</select></div>'+
@@ -608,7 +612,7 @@ function adminUsers(el){
     '<div class="sep"></div>'+
     (us.length===0 ? '<div class="empty">Henüz kullanıcı yok. Yukarıdaki formdan ekleyin.</div>' :
     '<div class="tblwrap"><table><thead><tr>'+
-      '<th>#</th><th>Kullanıcı adı</th><th>Mevki</th><th>Şifre</th><th class="num">Verdiği oy</th><th></th>'+
+      '<th>#</th><th>Kullanıcı adı</th><th>Mevki</th><th>Şifre durumu</th><th class="num">Verdiği oy</th><th></th>'+
     '</tr></thead><tbody>'+
     us.map(function(u,i){
       var row = (votes()[u.uid])||{};
@@ -620,7 +624,9 @@ function adminUsers(el){
           MEVKILER.concat(MEVKILER.indexOf(u.mevki)<0 && u.mevki ? [u.mevki] : []).map(function(m){
             return '<option value="'+esc(m)+'"'+(m===u.mevki?' selected':'')+'>'+esc(m)+'</option>'; }).join('')+
         '</select></td>'+
-        '<td class="mono muted">••••••</td>'+
+        '<td>'+(varsayilanSifreMi(u.passHash)
+                  ? '<span class="chip warn"><span class="dot"></span>Geçici</span>'
+                  : '<span class="chip good"><span class="dot"></span>Kendi belirledi</span>')+'</td>'+
         '<td class="num">'+given+' / '+p.expectedPer+'</td>'+
         '<td style="text-align:right">'+
           '<button class="btn sm" data-rn="'+u.uid+'">Adı değiştir</button> '+
@@ -1001,6 +1007,7 @@ function adminSettings(el){
       '<b>Oylama aralığı</b><span>1 – 10 (tam sayı)</span>'+
       '<b>Anonimlik</b><span>Kim kime kaç verdi yalnızca yöneticide görünür</span>'+
       '<b>Şifre değişimi</b><span>Oyuncular kendi şifrelerini giriş yaptıktan sonra değiştirebilir</span>'+
+      '<b>Geçici şifre</b><span>'+esc(VARSAYILAN_SIFRE)+' — bu şifre değiştirilmeden oy kullanılamaz</span>'+
     '</div>'+
   '</div>';
   el.querySelector('#pwf').onsubmit = async function(e){
@@ -1023,6 +1030,40 @@ function renderUser(){
   var given = others.filter(function(u){ return oyPuan(myRow,u.uid)>=1; }).length;
   var open = votingOpen();
   var meUser = us.find(function(u){ return u.uid===me.uid; }) || {mevki:''};
+
+  /* Geçici şifre hâlâ duruyorsa oylamaya geçilmez. */
+  if(meUser.passHash && varsayilanSifreMi(meUser.passHash)){
+    view.innerHTML =
+    '<div class="login">'+
+      '<div class="card">'+
+        '<h2>Önce şifrenizi belirleyin</h2>'+
+        '<p class="small muted" style="margin-top:6px">Merhaba '+esc(me.username)+'. Hesabınız geçici şifreyle açıldı; '+
+          'oy kullanabilmek için kendi şifrenizi belirlemeniz gerekiyor.</p>'+
+        '<div class="sep"></div>'+
+        '<form id="zorunluPw" class="grid" autocomplete="off">'+
+          '<div><label class="f">Yeni şifre</label><input type="password" id="z_new" required></div>'+
+          '<div><label class="f">Yeni şifre (tekrar)</label><input type="password" id="z_new2" required></div>'+
+          '<button class="btn primary" type="submit">Şifremi belirle ve devam et</button>'+
+        '</form>'+
+        '<div class="sep"></div>'+
+        '<div class="note">En az 4 karakter olmalı ve geçici şifreyle aynı olamaz.</div>'+
+      '</div>'+
+    '</div>';
+    var zf = view.querySelector('#zorunluPw');
+    view.querySelector('#z_new').focus();
+    zf.onsubmit = async function(e){
+      e.preventDefault();
+      var y1 = view.querySelector('#z_new').value, y2 = view.querySelector('#z_new2').value;
+      if(y1.length < 4){ toast('Yeni şifre en az 4 karakter olmalı.','bad'); return; }
+      if(y1 !== y2){ toast('Şifreler birbirini tutmuyor.','bad'); return; }
+      if(y1 === VARSAYILAN_SIFRE){ toast('Geçici şifrenin aynısını kullanamazsınız.','bad'); return; }
+      try{
+        await dbWrite('users/'+me.uid+'/passHash', hashPass(y1));
+        await refresh(); toast('Şifreniz belirlendi.'); render();
+      }catch(err){ toast(err.message,'bad'); }
+    };
+    return;
+  }
 
   var html =
   '<div class="card">'+
@@ -1181,6 +1222,7 @@ function sifreModal(uid){
     if(yeni.length < 4){ toast('Yeni şifre en az 4 karakter olmalı.','bad'); return; }
     if(yeni !== yeni2){ toast('Yeni şifreler birbirini tutmuyor.','bad'); return; }
     if(yeni === eski){ toast('Yeni şifre eskisiyle aynı olamaz.','bad'); return; }
+    if(yeni === VARSAYILAN_SIFRE){ toast('Geçici şifreyi kendinize şifre olarak veremezsiniz.','bad'); return; }
     try{
       await dbWrite('users/'+uid+'/passHash', hashPass(yeni));
       await refresh();
