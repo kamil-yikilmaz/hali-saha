@@ -846,12 +846,19 @@ function adminVotes(el){
   };
 }
 
-function resultsTable(R, showDetail){
+/* mod: 'tam' → toplam + en düşük + en yüksek (yalnızca yönetici)
+        'ozet' → toplam
+        ''     → yalnızca ortalama ve oy sayısı */
+function resultsTable(R, mod){
+  if(mod===true) mod='tam';
+  var toplamVar = (mod==='tam' || mod==='ozet');
+  var ucVar = (mod==='tam');
   if(!R.length) return '<div class="empty">Kullanıcı yok.</div>';
   return '<div class="tblwrap"><table><thead><tr>'+
     '<th class="num">Sıra</th><th>Kullanıcı</th><th>Mevki</th>'+
     '<th class="num">Ortalama</th><th class="num">Oy sayısı</th>'+
-    (showDetail?'<th class="num">Toplam</th><th class="num">En düşük</th><th class="num">En yüksek</th>':'')+
+    (toplamVar?'<th class="num">Toplam</th>':'')+
+    (ucVar?'<th class="num">En düşük</th><th class="num">En yüksek</th>':'')+
     '<th style="width:120px">Dağılım</th></tr></thead><tbody>'+
     R.map(function(r){
       var pct = r.avg===null?0:Math.round(r.avg/10*100);
@@ -861,7 +868,8 @@ function resultsTable(R, showDetail){
         '<td>'+mevkiChip(r.mevki)+'</td>'+
         '<td class="num"><b>'+fmt(r.avg)+'</b></td>'+
         '<td class="num '+(r.count<r.expected?'muted':'')+'">'+r.count+' / '+r.expected+'</td>'+
-        (showDetail?'<td class="num">'+r.sum+'</td><td class="num">'+(r.min===null?'—':r.min)+'</td><td class="num">'+(r.max===null?'—':r.max)+'</td>':'')+
+        (toplamVar?'<td class="num">'+r.sum+'</td>':'')+
+        (ucVar?'<td class="num">'+(r.min===null?'—':r.min)+'</td><td class="num">'+(r.max===null?'—':r.max)+'</td>':'')+
         '<td><div class="bar"><i style="width:'+pct+'%"></i></div></td>'+
       '</tr>';
     }).join('')+'</tbody></table></div>';
@@ -917,7 +925,7 @@ function adminResults(el){
       '<span class="chip">Genel ortalama: '+fmt(genel)+'</span>'+
       '<span class="chip '+(votingOpen()?'warn':'good')+'"><span class="dot"></span>'+(votingOpen()?'Oylama sürüyor':'Oylama kapalı')+'</span>'+
     '</div>'+
-    resultsTable(R, true)+
+    resultsTable(R, 'tam')+
     (votingOpen()? '<div class="note" style="margin-top:14px">Oylama hâlâ açık; liste girilen oylarla anlık hesaplanıyor. Kesin sonuç için oylamayı kapatın.</div>':'')+
   '</div>'+
   '<div class="card">'+
@@ -1102,7 +1110,7 @@ function istatistikBlogu(meUid){
       '<span class="chip">Katılım: %'+pr.pct+'</span>'+
       '<span class="chip">Genel ortalama: '+fmt(genel)+'</span>'+
     '</div>'+
-    resultsTable(R, true)+
+    resultsTable(R, 'ozet')+
     '<div class="sep"></div>'+
     '<h3 style="margin-bottom:10px">Mevkiye göre</h3>'+ mevkiBloklari(R, true)+
     (pr.pct<100 ? '<div class="note" style="margin-top:14px">Herkes oylamasını bitirmedi; ortalamalar şu ana kadar girilen oylarla hesaplandı ve diğerleri oyladıkça değişecek.</div>' : '')+
