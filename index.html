@@ -1000,6 +1000,7 @@ function adminSettings(el){
       '<b>Mevkiler</b><span>'+MEVKILER.join(' · ')+'</span>'+
       '<b>Oylama aralığı</b><span>1 – 10 (tam sayı)</span>'+
       '<b>Anonimlik</b><span>Kim kime kaç verdi yalnızca yöneticide görünür</span>'+
+      '<b>Şifre değişimi</b><span>Oyuncular kendi şifrelerini giriş yaptıktan sonra değiştirebilir</span>'+
     '</div>'+
   '</div>';
   el.querySelector('#pwf').onsubmit = async function(e){
@@ -1031,7 +1032,10 @@ function renderUser(){
         '<p class="small muted" style="margin-top:4px">Kendiniz dışındaki '+others.length+' oyuncuyu 1–10 arasında oyluyorsunuz.</p>'+
         '<div style="margin-top:8px">'+mevkiChip(meUser.mevki)+'</div>'+
       '</div>'+
-      '<span class="chip '+(open?'good':'bad')+'"><span class="dot"></span>'+(open?'Oylama açık':'Oylama kapalı')+'</span>'+
+      '<div class="row">'+
+        '<span class="chip '+(open?'good':'bad')+'"><span class="dot"></span>'+(open?'Oylama açık':'Oylama kapalı')+'</span>'+
+        '<button class="btn sm" id="myPw">Şifremi değiştir</button>'+
+      '</div>'+
     '</div>'+
     '<div class="sep"></div>'+
     '<div class="row" style="gap:14px">'+
@@ -1091,6 +1095,9 @@ function renderUser(){
   }
   view.innerHTML = html;
 
+  var pwBtn = view.querySelector('#myPw');
+  if(pwBtn) pwBtn.onclick = function(){ sifreModal(me.uid); };
+
   function ilerlemeGuncelle(){
     var row = (votes()[me.uid])||{};
     var n = others.filter(function(u){ return oyPuan(row,u.uid)>=1; }).length;
@@ -1136,6 +1143,51 @@ function renderUser(){
       }catch(e){ toast(e.message,'bad'); }
     };
   });
+}
+
+/* ----- Oyuncunun kendi şifresini değiştirmesi ----- */
+function sifreModal(uid){
+  var m = document.createElement('div');
+  m.className = 'modal';
+  m.innerHTML =
+  '<div class="card">'+
+    '<h2>Şifremi değiştir</h2>'+
+    '<p class="small muted" style="margin-top:4px">Yeni şifreniz en az 4 karakter olmalı.</p>'+
+    '<div class="sep"></div>'+
+    '<form id="pwForm" class="grid" autocomplete="off">'+
+      '<div><label class="f">Mevcut şifre</label><input type="password" id="s_old" required></div>'+
+      '<div><label class="f">Yeni şifre</label><input type="password" id="s_new" required></div>'+
+      '<div><label class="f">Yeni şifre (tekrar)</label><input type="password" id="s_new2" required></div>'+
+      '<div class="row" style="justify-content:flex-end;margin-top:4px">'+
+        '<button class="btn" type="button" id="s_cancel">Vazgeç</button>'+
+        '<button class="btn primary" type="submit">Kaydet</button>'+
+      '</div>'+
+    '</form>'+
+  '</div>';
+  document.body.appendChild(m);
+  m.onclick = function(e){ if(e.target===m) m.remove(); };
+  m.querySelector('#s_cancel').onclick = function(){ m.remove(); };
+  var ilkAlan = m.querySelector('#s_old');
+  if(ilkAlan) ilkAlan.focus();
+
+  m.querySelector('#pwForm').onsubmit = async function(e){
+    e.preventDefault();
+    var eski = m.querySelector('#s_old').value;
+    var yeni = m.querySelector('#s_new').value;
+    var yeni2 = m.querySelector('#s_new2').value;
+    var u = users().find(function(x){ return x.uid===uid; });
+    if(!u){ toast('Kullanıcı bulunamadı.','bad'); return; }
+    if(u.passHash !== hashPass(eski)){ toast('Mevcut şifre hatalı.','bad'); return; }
+    if(yeni.length < 4){ toast('Yeni şifre en az 4 karakter olmalı.','bad'); return; }
+    if(yeni !== yeni2){ toast('Yeni şifreler birbirini tutmuyor.','bad'); return; }
+    if(yeni === eski){ toast('Yeni şifre eskisiyle aynı olamaz.','bad'); return; }
+    try{
+      await dbWrite('users/'+uid+'/passHash', hashPass(yeni));
+      await refresh();
+      m.remove();
+      toast('Şifreniz güncellendi.');
+    }catch(err){ toast(err.message,'bad'); }
+  };
 }
 
 /* ----- Veritabanı ayar penceresi ----- */
