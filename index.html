@@ -1077,7 +1077,6 @@ function adminSettings(el){
       '<b>Mevkiler</b><span>'+MEVKILER.join(' · ')+'</span>'+
       '<b>Oylama aralığı</b><span>1 – 10 (tam sayı)</span>'+
       '<b>Anonimlik</b><span>Kim kime kaç verdi yalnızca yöneticide görünür</span>'+
-      '<b>Şifre değişimi</b><span>Oyuncular kendi şifrelerini giriş yaptıktan sonra değiştirebilir</span>'+
       '<b>Geçici şifre</b><span>'+esc(VARSAYILAN_SIFRE)+' — bu şifre değiştirilmeden oy kullanılamaz</span>'+
       '<b>Kendi kilidi</b><span>Oyuncu istatistikleri görüntülerse kendi oylaması kapanır; yalnızca yönetici yeniden açabilir</span>'+
     '</div>'+
@@ -1219,13 +1218,21 @@ function renderUser(){
 
   var html =
   '<div class="card">'+
-    '<div class="row" style="justify-content:space-between">'+
+    '<div class="row" style="justify-content:space-between;align-items:flex-start">'+
       '<div>'+
         '<h2>Merhaba, '+esc(me.username)+'</h2>'+
         '<p class="small muted" style="margin-top:4px">'+
           (kilitli ? 'Oylamanızı tamamladınız. Aşağıda güncel istatistikleri görüyorsunuz.'
-                   : 'Kendiniz dışındaki '+others.length+' oyuncuyu 1–10 arasında oyluyorsunuz.')+'</p>'+
-        '<div style="margin-top:8px">'+mevkiChip(meUser.mevki)+'</div>'+
+                   : 'Kendiniz dışındaki '+others.length+' oyuncuyu mevkilerine göre 1–10 arasında oyluyorsunuz.')+'</p>'+
+        '<div class="row" style="margin-top:10px;gap:8px;align-items:center">'+
+          '<span class="small" style="font-weight:600;color:var(--ink-2)">Mevkiniz:</span>'+
+          (kilitli ? mevkiChip(meUser.mevki) :
+            '<select id="myMevki" class="mini" style="font-weight:600;padding:5px 10px;border-radius:8px;cursor:pointer">'+
+              MEVKILER.concat(MEVKILER.indexOf(meUser.mevki)<0 && meUser.mevki ? [meUser.mevki] : []).map(function(m){
+                return '<option value="'+esc(m)+'"'+(m===meUser.mevki?' selected':'')+'>'+esc(m)+'</option>';
+              }).join('')+
+            '</select>'+mevkiChip(meUser.mevki))+
+        '</div>'+
       '</div>'+
       '<div class="row">'+
         '<span class="chip '+(kilitli||!open?'bad':'good')+'"><span class="dot"></span>'+
@@ -1263,12 +1270,21 @@ function renderUser(){
   }else if(!others.length){
     html += '<div class="card"><div class="empty">Oylanacak başka kullanıcı yok.</div></div>';
   }else{
+    var sortedOthers = others.slice().sort(function(a,b){
+      var d = mevkiSira(a.mevki)-mevkiSira(b.mevki);
+      return d!==0 ? d : a.username.localeCompare(b.username,'tr');
+    });
+
     html +=
     '<div class="card">'+
-      '<h2>Oylama</h2>'+
-      '<p class="small muted" style="margin-top:4px">Bir puana tıklayın; oyunuz anında kaydedilir ve istediğiniz zaman değiştirebilirsiniz. Verdiğiniz oyları sizden başkası göremez.</p>'+
+      '<div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">'+
+        '<div>'+
+          '<h2>Oylama</h2>'+
+          '<p class="small muted" style="margin-top:4px">Oyuncuları oynadıkları mevkiye göre değerlendirip 1–10 arası puan verin. Verdiğiniz oylar anında kaydedilir.</p>'+
+        '</div>'+
+      '</div>'+
       '<div class="sep"></div>'+
-      '<div class="vlist">'+ others.map(function(u){
+      '<div class="vlist">'+ sortedOthers.map(function(u){
         var o = oy(myRow, u.uid), cur = o?o.puan:0, not = o?o.aciklama:'';
         return '<div class="vcard" data-card="'+u.uid+'">'+
           '<div class="vhead">'+
@@ -1279,12 +1295,27 @@ function renderUser(){
             return '<button class="sc '+(cur===n?'on':'')+'" data-t="'+u.uid+'" data-v="'+n+'">'+n+'</button>';
           }).join('') +'</div>'+
           '<textarea class="cmt" data-c="'+u.uid+'" rows="2" maxlength="500" '+
-            'placeholder="Açıklama (isteğe bağlı) — neden bu puanı verdiniz?">'+esc(not)+'</textarea>'+
+            'placeholder="'+esc(u.mevki||'Oyuncu')+' performansı hakkında açıklama (isteğe bağlı)">'+esc(not)+'</textarea>'+
         '</div>';
       }).join('') +'</div>'+
     '</div>';
   }
   view.innerHTML = html;
+
+  var myMevkiSel = view.querySelector('#myMevki');
+  if(myMevkiSel){
+    myMevkiSel.onchange = async function(){
+      var newMevki = myMevkiSel.value;
+      try{
+        await dbWrite('users/'+me.uid+'/mevki', newMevki);
+        await refresh();
+        toast('Mevkiniz "'+newMevki+'" olarak güncellendi.');
+        render();
+      }catch(e){
+        toast(e.message,'bad');
+      }
+    };
+  }
 
   var pwBtn = view.querySelector('#myPw');
   if(pwBtn) pwBtn.onclick = function(){ sifreModal(me.uid); };
@@ -1294,7 +1325,6 @@ function renderUser(){
     if(sBtn.disabled) return;
     kapatmaUyarisi(me.uid, function(){ render(); });
   };
-
   function ilerlemeGuncelle(){
     var row = (votes()[me.uid])||{};
     var n = others.filter(function(u){ return oyPuan(row,u.uid)>=1; }).length;
@@ -1384,7 +1414,10 @@ function sifreModal(uid){
     if(yeni.length < 4){ toast('Yeni şifre en az 4 karakter olmalı.','bad'); return; }
     if(yeni !== yeni2){ toast('Yeni şifreler birbirini tutmuyor.','bad'); return; }
     if(yeni === eski){ toast('Yeni şifre eskisiyle aynı olamaz.','bad'); return; }
+<<<<<<< HEAD
     if(yeni === VARSAYILAN_SIFRE){ toast('Geçici şifreyi kendinize şifre olarak veremezsiniz.','bad'); return; }
+=======
+>>>>>>> 875e8dc (Kullanicinin kendi mevkisini secebilmesi ve mevki siralamasi eklendi)
     try{
       await dbWrite('users/'+uid+'/passHash', hashPass(yeni));
       await refresh();
