@@ -1414,10 +1414,7 @@ function sifreModal(uid){
     if(yeni.length < 4){ toast('Yeni şifre en az 4 karakter olmalı.','bad'); return; }
     if(yeni !== yeni2){ toast('Yeni şifreler birbirini tutmuyor.','bad'); return; }
     if(yeni === eski){ toast('Yeni şifre eskisiyle aynı olamaz.','bad'); return; }
-<<<<<<< HEAD
     if(yeni === VARSAYILAN_SIFRE){ toast('Geçici şifreyi kendinize şifre olarak veremezsiniz.','bad'); return; }
-=======
->>>>>>> 875e8dc (Kullanicinin kendi mevkisini secebilmesi ve mevki siralamasi eklendi)
     try{
       await dbWrite('users/'+uid+'/passHash', hashPass(yeni));
       await refresh();
