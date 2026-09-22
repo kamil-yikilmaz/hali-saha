@@ -1423,18 +1423,6 @@ function renderPlayer() {
   }
 
   pBody.innerHTML = `
-    <div class="card">
-      <h2>Oylama Rehberi</h2>
-      <div class="note" style="margin-top:8px">
-        <b>📌 Puanlama Rehberi:</b>
-        <div class="row" style="gap:14px;margin-top:6px;font-size:12.5px;color:var(--ink-2)">
-          <span><b>1–3:</b> Gelişmeli / Yetersiz</span>
-          <span><b>4–6:</b> Ortalama / Standart</span>
-          <span><b>7–8:</b> Başarılı / İyi Katkı</span>
-          <span><b>9–10:</b> Maçın Yıldızı / Çok İyi</span>
-        </div>
-      </div>
-    </div>
     ${positions.map(pos => {
       const posPlayers = others.filter(p => p.mevki === pos);
       if (!posPlayers.length) return '';
