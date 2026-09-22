@@ -703,12 +703,16 @@ function renderLogin(){
         '<button class="tab '+(t==='admin'?'on':'')+'" data-lt="admin">Yönetici Girişi</button>'+
       '</div>'+
       '<form id="loginForm" class="grid" autocomplete="off">'+
-        '<div><label class="f">Kullanıcı adı</label><input type="text" id="lu" required></div>'+
+        '<div><label class="f">Kullanıcı adı</label><input type="text" id="lu" required placeholder="ör. admin veya ahmet.yilmaz"></div>'+
         '<div><label class="f">Şifre</label><input type="password" id="lp" required></div>'+
         '<button class="btn primary" type="submit">'+(t==='admin'?'Yönetici olarak gir':'Giriş yap')+'</button>'+
       '</form>'+
-      (t==='admin' ? ''
-        : '<div class="sep"></div><div class="note">Oyuncu hesaplarını yönetici oluşturur. Giriş yaptığınızda kendiniz dışındaki herkesi 1–10 arasında oylarsınız.</div>')+
+      '<div class="sep"></div>'+
+      '<div class="note" style="font-size:12.5px">'+
+        (t==='admin' 
+          ? 'Yönetici hesabı: <b>admin</b> &nbsp;|&nbsp; Şifre: <b>admin123</b>'
+          : 'Oyuncu hesabı (örnek: <b>ahmet.yilmaz</b>, <b>mehmet.kaya</b>) &nbsp;|&nbsp; Geçici şifre: <b>123</b>')+
+      '</div>'+
     '</div>'+
   '</div>';
 
@@ -725,21 +729,43 @@ async function doLogin(username, pass, kind){
   if(!username || !pass) return;
   try{
     await refresh();
-  }catch(e){ toast(e.message,'bad'); return; }
+  }catch(e){ toast('Veritabanına bağlanılamadı: '+e.message,'bad'); return; }
   var h = hashPass(pass);
-  if(kind==='admin'){
-    var A = S.data.admins||{};
-    var key = Object.keys(A).find(function(k){
-      return (A[k].username||k).toLowerCase()===username.toLowerCase(); });
-    if(!key || A[key].passHash!==h){ toast('Yönetici adı veya şifre hatalı.','bad'); return; }
-    S.session = {type:'admin', uid:key, username:A[key].username||key};
+
+  var A = S.data.admins||{};
+  var adminKey = Object.keys(A).find(function(k){
+    return (A[k].username||k).toLowerCase()===username.toLowerCase();
+  });
+
+  var u = users().find(function(x){
+    return x.username.toLowerCase()===username.toLowerCase();
+  });
+
+  // 1. Yönetici eşleşmesi
+  if(adminKey && A[adminKey].passHash === h){
+    S.session = {type:'admin', uid:adminKey, username:A[adminKey].username||adminKey};
     S.tab='users';
-  }else{
-    var u = users().find(function(x){ return x.username.toLowerCase()===username.toLowerCase(); });
-    if(!u || u.passHash!==h){ toast('Kullanıcı adı veya şifre hatalı.','bad'); return; }
-    S.session = {type:'user', uid:u.uid, username:u.username};
+    render();
+    return;
   }
-  render();
+
+  // 2. Kullanıcı/Oyuncu eşleşmesi
+  if(u && u.passHash === h){
+    S.session = {type:'user', uid:u.uid, username:u.username};
+    render();
+    return;
+  }
+
+  // 3. Eşleşme yoksa yardımcı hata mesajları
+  if(adminKey){
+    toast('Yönetici şifresi hatalı. (Varsayılan: admin123)','bad');
+    return;
+  }
+  if(u){
+    toast('Kullanıcı şifresi hatalı. (Varsayılan geçici şifre: 123)','bad');
+    return;
+  }
+  toast('Kullanıcı bulunamadı. Kullanıcı adını kontrol edin.','bad');
 }
 
 /* ----- Yönetici paneli ----- */
