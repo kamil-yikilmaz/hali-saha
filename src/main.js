@@ -1,3 +1,4 @@
+import {balancedTeams,positionRanks} from './teams.js';
 import './style.css';
 import {initializeApp} from 'firebase/app';
 import {getAuth,setPersistence,inMemoryPersistence,onAuthStateChanged,signInWithEmailAndPassword,signOut,sendPasswordResetEmail,sendEmailVerification,multiFactor,getMultiFactorResolver,TotpMultiFactorGenerator} from 'firebase/auth';
@@ -68,15 +69,15 @@ function table(rows,admin) {
   return '<div class="table"><table><thead><tr><th>Sıra</th><th>Oyuncu</th><th>Mevki</th><th>Ortalama</th><th>Oy</th><th>Toplam</th>'+(admin?'<th>Min / Maks</th>':'')+'</tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(r.rank??'—')+'</td><td>'+esc(r.username)+'</td><td>'+esc(r.mevki)+'</td><td>'+(r.avg===null?'—':r.avg.toFixed(2))+'</td><td>'+r.count+'/'+r.expected+'</td><td>'+r.sum+'</td>'+(admin?'<td>'+esc(r.min??'—')+' / '+esc(r.max??'—')+'</td>':'')+'</tr>').join('')+'</tbody></table></div>';
 }
 function render() {
-  const d=data,admin=d.me.role==='admin',others=d.players.filter(p=>p.uid!==d.me.uid),given=others.filter(p=>d.myVotes[p.uid]).length;
+  const d=data,admin=d.me.role==='admin',others=d.players.filter(p=>p.uid!==d.me.uid).sort((a,b)=>positions.indexOf(a.mevki)-positions.indexOf(b.mevki)||a.username.localeCompare(b.username,'tr')),given=others.filter(p=>d.myVotes[p.uid]).length;
   root.innerHTML='<section class="card"><div class="row"><h2>'+esc(d.me.username)+'</h2><button id="refresh">Yenile</button><button id="passwordReset">Şifre değiştir</button><button id="account">Hesap güvenliği</button><button id="logout">Çıkış</button></div><p>'+ (d.open?'Oylama açık':'Oylama kapalı')+' · '+d.progress.done+' / '+d.progress.expected+' oy</p></section><div id="content"></div>';
   bind('logout',async()=>{await signOut(auth);message('Çıkış yapıldı.');});bind('refresh',()=>call('read'));
   bind('account',async()=>{accountShell(auth.currentUser);message('');});
   bind('passwordReset',async()=>{await sendPasswordResetEmail(auth,auth.currentUser.email);message('Şifre değiştirme bağlantısı gönderildi.');});
   const content=document.getElementById('content');
   if(d.me.player&&!d.me.locked&&d.open) {
-    content.innerHTML='<section class="card"><h2>Değerlendirmeleriniz</h2><p>'+given+' / '+others.length+' oyuncu değerlendirildi. Her kartı ayrı kaydedin.</p><label>Mevkiniz<select id="position">'+positions.map(p=>'<option '+(p===d.me.mevki?'selected':'')+'>'+esc(p)+'</option>').join('')+'</select></label><button id="positionSave">Mevkiyi güncelle</button> <button id="finalize" class="primary" '+(given!==others.length||!others.length?'disabled':'')+'>Kesinleştir ve sonuçları gör</button></section><div class="grid">'+others.map(p=>{
-      const v=d.myVotes[p.uid]||{};return '<form class="card vote" data-id="'+esc(p.uid)+'"><h3>'+esc(p.username)+' · '+esc(p.mevki)+'</h3><label>Puan<select name="puan" required><option value="">Seçin</option>'+Array.from({length:10},(_,i)=>'<option '+(v.puan===i+1?'selected':'')+'>'+(i+1)+'</option>').join('')+'</select></label><label>Açıklama<textarea name="aciklama" maxlength="500" rows="3">'+esc(v.aciklama||'')+'</textarea></label><button class="primary">Kaydet</button> <small>'+ (v.puan?'Kaydedilmiş puan: '+v.puan:'Henüz kaydedilmedi')+'</small></form>';
+    content.innerHTML='<section class="card"><h2>Değerlendirmeleriniz</h2><p class="muted">Puan rehberi: 1–3 Gelişmeli · 4–6 Ortalama · 7–8 Başarılı · 9–10 Çok iyi</p><p>'+given+' / '+others.length+' oyuncu değerlendirildi. Her kartı ayrı kaydedin.</p><label>Mevkiniz<select id="position">'+positions.map(p=>'<option '+(p===d.me.mevki?'selected':'')+'>'+esc(p)+'</option>').join('')+'</select></label><button id="positionSave">Mevkiyi güncelle</button> <button id="finalize" class="primary" '+(given!==others.length||!others.length?'disabled':'')+'>Kesinleştir ve sonuçları gör</button></section><div class="grid">'+others.map((p,index)=>{
+      const v=d.myVotes[p.uid]||{};return (index===0||others[index-1].mevki!==p.mevki?'<h3 class="group">'+esc(p.mevki)+'</h3>':'')+'<form class="card vote" data-id="'+esc(p.uid)+'"><h3>'+esc(p.username)+' · '+esc(p.mevki)+'</h3><label>Puan<select name="puan" required><option value="">Seçin</option>'+Array.from({length:10},(_,i)=>'<option '+(v.puan===i+1?'selected':'')+'>'+(i+1)+'</option>').join('')+'</select></label><label>Açıklama<textarea name="aciklama" maxlength="500" rows="3">'+esc(v.aciklama||'')+'</textarea></label><button class="primary">Kaydet</button> <small>'+ (v.puan?'Kaydedilmiş puan: '+v.puan:'Henüz kaydedilmedi')+'</small></form>';
     }).join('')+'</div>';
     document.querySelectorAll('.vote').forEach(form=>form.onsubmit=e=>{e.preventDefault();const values=new FormData(form);run(async()=>{
       // Keep other cards' unsaved text during an individual save.
@@ -89,9 +90,9 @@ function render() {
     bind('finalize',async()=>{if(confirm('Kaydedilmiş oylarınız kesinleşecek ve değiştirilemeyecek. Kaydetmediğiniz değişiklikler dahil edilmez. Devam edilsin mi?'))await call('finalize');});
   }
   if(d.results){
-    content.insertAdjacentHTML('beforeend','<section class="card"><h2>Sonuçlar</h2>'+table(d.results,admin)+(d.open?'<p class="muted">Oylama sürüyor; sonuçlar değişebilir.</p>':'')+'</section>'+positions.map(p=>'<section class="card"><h3>'+esc(p)+'</h3>'+table(d.results.filter(r=>r.mevki===p),false)+'</section>').join('')+(d.comments.length?'<section class="card"><h2>Size yazılan açıklamalar</h2>'+d.comments.map(c=>'<p class="quote"><b>'+c.puan+'/10</b> '+esc(c.aciklama)+'</p>').join('')+'</section>':''));
+    content.insertAdjacentHTML('beforeend','<section class="card"><h2>Sonuçlar</h2>'+table(d.results,admin)+(d.open?'<p class="muted">Oylama sürüyor; sonuçlar değişebilir.</p>':'')+'</section>'+positions.map(p=>'<section class="card"><h3>'+esc(p)+'</h3>'+table(positionRanks(d.results.filter(r=>r.mevki===p)),false)+'</section>').join('')+(d.comments.length?'<section class="card"><h2>Size yazılan açıklamalar</h2>'+d.comments.map(c=>'<p class="quote"><b>'+c.puan+'/10</b> '+esc(c.aciklama)+'</p>').join('')+'</section>':''));
   }
-  if(admin) adminPanel(content,d);
+  if(admin) {adminPanel(content,d);teamPanel(content,d.results);}
 }
 function download(name,value,type='application/json'){const url=URL.createObjectURL(new Blob([value],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function csvCell(value){let s=String(value??'');if(/^[\s]*[=+@-]/.test(s)||/^[\t\r\n]/.test(s))s="'"+s;return '"'+s.replaceAll('"','""')+'"';}
@@ -119,3 +120,14 @@ async function boot() {
   });
 }
 boot().catch(()=>{root.textContent='Güvenli bağlantı kurulamadı. Sayfayı yenileyip tekrar deneyin.';});
+function teamPanel(content,rows){
+  content.insertAdjacentHTML('beforeend','<section class="card"><h2>Dengeli Takım Kurucu</h2><p class="muted">Puanı olmayan oyuncular dengelemede 5 kabul edilir. Öneri, en iyi dengeyi garanti etmez.</p><div class="row">'+rows.map(r=>'<label><input class="teamPlayer" type="checkbox" value="'+esc(r.uid)+'" checked>'+esc(r.username)+' · '+esc(r.mevki)+'</label>').join('')+'</div><button id="selectTeams">Tümünü seç / temizle</button> <button id="buildTeams">Takımları oluştur</button><div id="teams"></div></section>');
+  bind('selectTeams',async()=>{const boxes=[...document.querySelectorAll('.teamPlayer')],next=!boxes.every(b=>b.checked);boxes.forEach(b=>b.checked=next);});
+  bind('buildTeams',async()=>{
+    const ids=new Set([...document.querySelectorAll('.teamPlayer:checked')].map(b=>b.value));
+    if(ids.size<2){message('En az iki oyuncu seçin.');return;}
+    const {teams,averages}=balancedTeams(rows.filter(r=>ids.has(r.uid))),names=['Beyaz Takım','Kırmızı Takım'];
+    document.getElementById('teams').innerHTML='<p>Ortalama farkı: '+Math.abs(averages[0]-averages[1]).toFixed(2)+'</p><div class="grid">'+teams.map((t,i)=>'<section><h3>'+names[i]+' · '+t.length+' oyuncu · '+averages[i].toFixed(2)+'</h3><ul>'+t.map(p=>'<li>'+esc(p.username)+' · '+esc(p.mevki)+' · '+(p.avg===null?'—':p.avg.toFixed(2))+'</li>').join('')+'</ul></section>').join('')+'</div><button id="copyTeams">Kadroyu kopyala</button>';
+    bind('copyTeams',async()=>{await navigator.clipboard.writeText(teams.map((t,i)=>names[i]+' (Ort: '+averages[i].toFixed(2)+')\n'+t.map(p=>p.username+' ('+p.mevki+')').join('\n')).join('\n\n'));message('Kadro panoya kopyalandı.');});message('');
+  });
+}

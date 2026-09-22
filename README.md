@@ -10,6 +10,7 @@ Bu dal eski tarayıcı içi şifre doğrulamasını kaldırır. E-posta ile Fire
 - Genel kapanış, oyuncu kilidini açma ve verdiği oyları sıfırlama.
 - Genel/mevki listeleri, yönetici oy dökümü, yorumlar, JSON/CSV dışa aktarma.
 - Mevki ve oyuncu yönetimi, açık/koyu tema.
+- Ana daldaki dengeli takım kurucu, panoya kopyalama, puan rehberi ve mevki içi eşit derece davranışı.
 
 ## Bilinçli değişiklikler
 
