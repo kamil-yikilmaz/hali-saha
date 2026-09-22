@@ -91,18 +91,22 @@ test('unlinked users and disabled members are denied',async()=>{
  await db.query('delete from app_private.rate_limits where auth_id=$1',[P]);
  assert.equal((await api(P,SP,{action:'read'})).error,'FORBIDDEN');
 });
-test('player_api supports username login, default 123 password detection, and password change',async()=>{
+test('player_api supports username login, preserved custom password, and default password reset',async()=>{
  const hash123='a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3';
  const newHash='b665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae4';
  const errLogin=(await db.query('select public.player_api($1::jsonb) r',[JSON.stringify({action:'login',username:'Oyuncu B',pass_hash:'wrong'})])).rows[0].r;
  assert.equal(errLogin.error,'INVALID_PASSWORD');
- const loginRes=(await db.query('select public.player_api($1::jsonb) r',[JSON.stringify({action:'login',username:'Oyuncu B',pass_hash:hash123})])).rows[0].r;
- assert.equal(loginRes.me.username,'Oyuncu B');
- assert.equal(loginRes.me.is_default_password,true);
+ // Preserved custom password from public.players works and does not require change
+ const preservedLogin=(await db.query('select public.player_api($1::jsonb) r',[JSON.stringify({action:'login',username:'Oyuncu B',pass_hash:'legacy-test-only'})])).rows[0].r;
+ assert.equal(preservedLogin.me.username,'Oyuncu B');
+ assert.equal(preservedLogin.me.is_default_password,false);
+ // Admin resets password to default 123
+ await api(A,SA,{action:'resetPassword',target:Q},{mfa:true});
+ const defaultLogin=(await db.query('select public.player_api($1::jsonb) r',[JSON.stringify({action:'login',username:'Oyuncu B',pass_hash:hash123})])).rows[0].r;
+ assert.equal(defaultLogin.me.is_default_password,true);
+ // Player changes password to new custom password
  const chRes=(await db.query('select public.player_api($1::jsonb) r',[JSON.stringify({action:'change_password',username:'Oyuncu B',pass_hash:hash123,new_pass_hash:newHash})])).rows[0].r;
  assert.equal(chRes.me.is_default_password,false);
- const oldRejected=(await db.query('select public.player_api($1::jsonb) r',[JSON.stringify({action:'login',username:'Oyuncu B',pass_hash:hash123})])).rows[0].r;
- assert.equal(oldRejected.error,'INVALID_PASSWORD');
  const newAccepted=(await db.query('select public.player_api($1::jsonb) r',[JSON.stringify({action:'login',username:'Oyuncu B',pass_hash:newHash})])).rows[0].r;
  assert.equal(newAccepted.me.is_default_password,false);
 });

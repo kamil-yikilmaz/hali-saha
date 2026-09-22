@@ -9,7 +9,25 @@ create table if not exists app_private.player_credentials (
 
 revoke all on app_private.player_credentials from public, anon, authenticated;
 
--- Seed player_credentials for all existing players with SHA-256 of '123'
+-- Seed player_credentials: Eğer public.players içinde kayıtlı pass_hash varsa koru,
+-- '123'ün hash'i ile aynı olanlar geçici (is_default=true), farklı olanlar kendi belirlediği (is_default=false) olarak aktarılır:
+do $$
+begin
+  if exists (select 1 from information_schema.columns where table_schema='public' and table_name='players' and column_name='pass_hash') then
+    insert into app_private.player_credentials(player_id, pass_hash, is_default)
+    select 
+      p.id::text,
+      coalesce(nullif(p.pass_hash,''), 'a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3'),
+      (coalesce(nullif(p.pass_hash,''), 'a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3') = 'a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3')
+    from public.players p
+    where not coalesce(p.is_admin, false)
+    on conflict (player_id) do update set
+      pass_hash = excluded.pass_hash,
+      is_default = excluded.is_default;
+  end if;
+end $$;
+
+-- public.players haricinde state'de kayıtlı diğer üyeler varsa varsayılan şifre tanımla:
 insert into app_private.player_credentials(player_id, pass_hash, is_default)
 select key, 'a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3', true
 from app_private.state s, jsonb_each(s.data->'members') m
