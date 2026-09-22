@@ -62,10 +62,10 @@ Eski herkese açık politikaları geri getirme. Hata varsa güvenli bakım/giri�
 
 - Eski tablolardan 22 üye ve 20 oy güvenli duruma aktarıldı; kaynak kayıtlar korundu.
 - Eski herkese açık politikalar kaldırıldı; beş eski tablo/görünüm için anonim HEAD isteği ve anonim RPC çağrısı 401 ile reddedildi.
-- Herkese açık kayıt kapatıldı; e-posta doğrulama açık kaldı. Auth minimum parola uzunluğu 14, güvenli parola değişikliği ve mevcut parola gereksinimi etkinleştirildi.
+- Herkese açık kayıt kapatıldı; e-posta doğrulama açık kaldı. Auth minimum parola uzunluğu başlangıçta 14 olarak ayarlandı (aşağıdaki kullanıcı tercihiyle 8 olarak güncellendi); güvenli parola değişikliği ve mevcut parola gereksinimi etkinleştirildi.
 - Auth hesabı ve hesap eşleştirmesi sayısı kurulum sırasında sıfırdı. İlk yönetici hesabı oluşturulmadan gerçek giriş/MFA uçtan uca testi tamamlanamaz.
 - Sızmış parola kontrolü Pro plan gerektiriyor; etkinleştirilmedi. CAPTCHA sağlayıcı anahtarları ve özel SMTP kurulmadı.
 
 ## Kullanıcı tercihi — parola sınırı
 
-Uygulamadaki yeni parola alanlarının minimumu 8 karakter olarak güncellendi. Canlı Auth politikası da 8 karaktere indirilecek; bu son ayarın kaydı ayrı doğrulanmalıdır. MFA ve mevcut parola doğrulaması korunur.
+Uygulamadaki yeni parola alanlarının minimumu 8 karakter olarak güncellendi. Canlı Auth politikası da 8 karakter olarak kaydedildi; Email ayarları yeniden açılarak kalıcı değer doğrulandı. MFA ve mevcut parola doğrulaması korunur.
