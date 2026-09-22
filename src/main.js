@@ -10,6 +10,15 @@ const fmt = (n, d = 2) => (n === null || n === undefined ? '—' : Number(n).toF
 const positions = ['Kaleci', 'Defans', 'Orta Saha', 'Forvet'];
 const posClasses = { 'Kaleci': 'pos-k', 'Defans': 'pos-d', 'Orta Saha': 'pos-o', 'Forvet': 'pos-f' };
 
+const DEFAULT_PASS = '123';
+const DEFAULT_PASS_HASH = 'a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3';
+
+async function sha256Hex(str) {
+  const buf = new TextEncoder().encode(str);
+  const hashBuf = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 function mevkiChip(m) {
   const c = posClasses[m] || '';
   return `<span class="chip pos ${c}">${esc(m || '—')}</span>`;
@@ -56,12 +65,12 @@ function csvCell(val) {
   return '"' + s.replaceAll('"', '""') + '"';
 }
 
-// Access and refresh tokens stay in memory; refreshing the page requires a new login.
 const sb = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: true, detectSessionInUrl: false }
 });
 
-let session = null;
+let session = null;          // { type: 'admin' | 'player', user: { email/username } }
+let playerSession = null;    // { username, passHash }
 let data = null;
 let busy = false;
 let authEpoch = 0;
@@ -72,7 +81,7 @@ try {
   for (const key of ['pos_dbcfg_v1', 'pos_demo_v1']) localStorage.removeItem(key);
 } catch {}
 
-// Theme management
+// Theme
 const themeBtn = document.querySelector('#theme');
 if (themeBtn) {
   themeBtn.onclick = () => {
@@ -100,7 +109,10 @@ const errors = {
   MEMBER_LIMIT: 'En fazla 100 üye desteklenir.',
   CONFIRM_REQUIRED: 'Önce oylamayı kapatın ve onay metnini girin.',
   ACCOUNT_NOT_VERIFIED: 'Bu adresle doğrulanmış bir hesap bulunamadı.',
-  RATE_LIMITED: 'Çok fazla istek. Bir dakika sonra tekrar deneyin.'
+  RATE_LIMITED: 'Çok fazla istek. Bir dakika sonra tekrar deneyin.',
+  INVALID_PASSWORD: 'Şifre hatalı. Lütfen kontrol edin.',
+  USER_NOT_FOUND: 'Bu kullanıcı adıyla kayıtlı bir oyuncu bulunamadı.',
+  INVALID_NEW_PASSWORD: 'Yeni şifre geçersiz veya 123 ile aynı olamaz.'
 };
 
 function errorMessage(e) {
@@ -129,12 +141,36 @@ function checked(r) {
   return r.data;
 }
 
+// Admin RPC wrapper
 async function call(action, params = {}) {
   const epoch = authEpoch;
   const r = checked(await sb.rpc('secure_api', { payload: { action, ...params } }));
   if (epoch !== authEpoch || !session) return;
   if (r.error) {
     if (r.error === 'UNAUTHENTICATED') {
+      await logout();
+    }
+    throw { code: r.error };
+  }
+  data = r;
+  render();
+  message('');
+  return r;
+}
+
+// Player RPC wrapper
+async function callPlayer(action, params = {}) {
+  if (!playerSession) return;
+  const r = checked(await sb.rpc('player_api', {
+    payload: {
+      action,
+      username: playerSession.username,
+      pass_hash: playerSession.passHash,
+      ...params
+    }
+  }));
+  if (r.error) {
+    if (r.error === 'INVALID_PASSWORD' || r.error === 'USER_NOT_FOUND') {
       await logout();
     }
     throw { code: r.error };
@@ -153,6 +189,7 @@ function bind(id, fn) {
 async function logout() {
   ++authEpoch;
   session = null;
+  playerSession = null;
   data = null;
   root.replaceChildren();
   try { await sb.auth.signOut({ scope: 'global' }); } catch {}
@@ -162,7 +199,7 @@ async function logout() {
 }
 
 // -----------------------------------------------------------------------------
-// Giriş ve MFA Akışı
+// Giriş Ekranı (Kullanıcı Girişi + Yönetici Girişi)
 // -----------------------------------------------------------------------------
 function login() {
   const isAdmin = (loginTab === 'admin');
@@ -174,15 +211,15 @@ function login() {
           <button class="tab ${loginTab === 'admin' ? 'on' : ''}" id="tabAdmin">Yönetici Girişi</button>
         </div>
         <form id="loginForm" class="grid" autocomplete="off">
-          <h2>${isAdmin ? 'Yönetici Girişi' : 'Kullanıcı Girişi'}</h2>
+          <h2>${isAdmin ? 'Yönetici Girişi' : 'Oyuncu Girişi'}</h2>
           <p class="small muted">${isAdmin
             ? 'Yönetici hesabı Supabase Auth ve Google Authenticator (TOTP) ile korunmaktadır.'
-            : 'Yönetici tarafından eşleştirilen doğrulanmış e-posta hesabınızla giriş yapın.'}</p>
-          <label class="f">E-posta
-            <input id="loginEmail" type="email" autocomplete="username" required maxlength="254" placeholder="${isAdmin ? 'admin@example.com' : 'oyuncu@example.com'}">
+            : 'Yöneticinin oluşturduğu kullanıcı adınız ve şifrenizle (varsayılan: 123) giriş yapın.'}</p>
+          <label class="f">${isAdmin ? 'Yönetici E-posta' : 'Kullanıcı Adı'}
+            <input id="loginUser" type="${isAdmin ? 'email' : 'text'}" autocomplete="${isAdmin ? 'username' : 'off'}" required maxlength="254" placeholder="${isAdmin ? 'admin@example.com' : 'ör. ahmet.yilmaz veya kamil.yikilmaz'}">
           </label>
           <label class="f">Şifre
-            <input id="loginPassword" type="password" autocomplete="current-password" required>
+            <input id="loginPassword" type="password" autocomplete="current-password" required placeholder="${isAdmin ? 'Yönetici şifreniz' : 'Şifreniz (ilk girişte: 123)'}">
           </label>
           <button class="btn primary" type="submit">${isAdmin ? 'Yönetici Olarak Gir' : 'Giriş Yap'}</button>
         </form>
@@ -190,7 +227,7 @@ function login() {
         <div class="note" style="font-size:12.5px">
           ${isAdmin
             ? 'Yönetici işlemleri son 10 dakika içinde doğrulanmış <b>AAL2 (TOTP)</b> oturumu gerektirir.'
-            : 'Sayfayı yenilediğinizde güvenlik gereği yeniden giriş yapmanız gerekir.'}
+            : 'İlk defa giriyorsanız geçici şifreniz <b>123</b>\'tür. Girişte yeni şifrenizi belirlemeniz istenecektir.'}
         </div>
       </div>
     </div>
@@ -202,54 +239,115 @@ function login() {
   document.getElementById('loginForm').onsubmit = e => {
     e.preventDefault();
     run(async () => {
-      const email = document.getElementById('loginEmail').value.trim();
-      const password = document.getElementById('loginPassword').value;
+      const uVal = document.getElementById('loginUser').value.trim();
+      const pVal = document.getElementById('loginPassword').value;
       document.getElementById('loginPassword').value = '';
 
-      const r = checked(await sb.auth.signInWithPassword({ email, password }));
-      session = r.session;
-      ++authEpoch;
-
       if (loginTab === 'admin') {
+        // Supabase Auth + TOTP MFA
+        const r = checked(await sb.auth.signInWithPassword({ email: uVal, password: pVal }));
+        session = { type: 'admin', user: r.session.user };
+        ++authEpoch;
+
         const factors = checked(await sb.auth.mfa.listFactors());
         const verified = (factors.totp || []).find(f => f.status === 'verified');
         if (verified) {
-          renderMfaChallenge(verified.id, email);
+          renderMfaChallenge(verified.id, uVal);
           return;
         } else {
-          // Temizle ve yeni TOTP kur
           for (const f of (factors.all || []).filter(f => f.status === 'unverified')) {
             await sb.auth.mfa.unenroll({ factorId: f.id });
           }
           const enroll = checked(await sb.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Halı Saha' }));
-          renderMfaEnroll(enroll.id, enroll.totp.secret, enroll.totp.uri, email);
+          renderMfaEnroll(enroll.id, enroll.totp.secret, enroll.totp.uri, uVal);
           return;
         }
       }
 
-      // Standart oyuncu girişi
-      try {
-        await call('read');
-        toast('Giriş başarılı.');
-      } catch (err) {
-        if (err && err.code === 'MFA_REQUIRED') {
-          // Admin kullanıcısı kullanıcı sekmesinden girdiyse MFA'ya yönlendir
-          const factors = checked(await sb.auth.mfa.listFactors());
-          const verified = (factors.totp || []).find(f => f.status === 'verified');
-          if (verified) {
-            renderMfaChallenge(verified.id, email);
-          } else {
-            const enroll = checked(await sb.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Halı Saha' }));
-            renderMfaEnroll(enroll.id, enroll.totp.secret, enroll.totp.uri, email);
-          }
-          return;
-        }
-        throw err;
+      // Oyuncu Girişi (Kullanıcı Adı + Şifre / 123)
+      const passHash = await sha256Hex(pVal);
+      const res = checked(await sb.rpc('player_api', {
+        payload: { action: 'login', username: uVal, pass_hash: passHash }
+      }));
+
+      if (res.error) throw { code: res.error };
+
+      playerSession = { username: uVal, passHash };
+      session = { type: 'player', user: { email: uVal } };
+      data = res;
+      ++authEpoch;
+
+      if (res.me && res.me.is_default_password) {
+        renderMandatoryPasswordChange(uVal, passHash);
+        return;
       }
+
+      render();
+      toast('Giriş başarılı.');
     });
   };
 }
 
+// -----------------------------------------------------------------------------
+// İlk Girişte Zorunlu Şifre Değiştirme Ekranı
+// -----------------------------------------------------------------------------
+function renderMandatoryPasswordChange(username, oldPassHash) {
+  root.innerHTML = `
+    <div class="login">
+      <div class="card">
+        <h2>Önce şifrenizi belirleyin</h2>
+        <p class="small muted" style="margin-top:6px">
+          Merhaba <b>${esc(username)}</b>. Hesabınız geçici şifreyle (<b>123</b>) açıldı; oy kullanabilmek için kendi şifrenizi belirlemeniz gerekmektedir.
+        </p>
+        <div class="sep"></div>
+        <form id="mandatoryPwForm" class="grid" autocomplete="off">
+          <div>
+            <label class="f">Yeni Şifre</label>
+            <input type="password" id="mNewPw" minlength="4" required placeholder="En az 4 karakter">
+          </div>
+          <div>
+            <label class="f">Yeni Şifre Tekrar</label>
+            <input type="password" id="mAgainPw" minlength="4" required placeholder="Yeni şifreyi tekrar yazın">
+          </div>
+          <button class="btn primary" type="submit">Şifremi Belirle ve Devam Et</button>
+        </form>
+        <div class="sep"></div>
+        <div class="note">Yeni şifreniz en az 4 karakter olmalı ve geçici şifre (123) ile aynı olamaz.</div>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('mandatoryPwForm').onsubmit = e => {
+    e.preventDefault();
+    run(async () => {
+      const p1 = document.getElementById('mNewPw').value;
+      const p2 = document.getElementById('mAgainPw').value;
+      if (p1.length < 4) { toast('Şifre en az 4 karakter olmalıdır.', 'bad'); return; }
+      if (p1 !== p2) { toast('Şifreler birbirini tutmuyor.', 'bad'); return; }
+      if (p1 === DEFAULT_PASS) { toast('Geçici şifrenin aynısını (123) kullanamazsınız.', 'bad'); return; }
+
+      const newHash = await sha256Hex(p1);
+      const res = checked(await sb.rpc('player_api', {
+        payload: {
+          action: 'change_password',
+          username,
+          pass_hash: oldPassHash,
+          new_pass_hash: newHash
+        }
+      }));
+      if (res.error) throw { code: res.error };
+
+      playerSession = { username, passHash: newHash };
+      data = res;
+      render();
+      toast('Şifreniz başarıyla belirlendi, aramıza hoş geldiniz!');
+    });
+  };
+}
+
+// -----------------------------------------------------------------------------
+// MFA Challenge ve Enroll
+// -----------------------------------------------------------------------------
 function renderMfaChallenge(factorId, email) {
   root.innerHTML = `
     <div class="login">
@@ -293,7 +391,7 @@ function renderMfaEnroll(factorId, secret, uri, email) {
         <div class="mfa-box">
           <div style="width:48px;height:48px;border-radius:12px;background:var(--good);color:#fff;display:grid;place-items:center;font-size:22px">📱</div>
           <h2>Yönetici MFA Kurulumu</h2>
-          <p class="small muted">Yönetici hesabı için iki aşamalı doğrulama (TOTP) zorunludur. Aşağıdaki QR kodu telefonunuzdaki kimlik doğrulama uygulamasıyla (Google Authenticator, Microsoft Authenticator vb.) tarayın:<br><b>${esc(email)}</b></p>
+          <p class="small muted">Yönetici hesabı için iki aşamalı doğrulama (TOTP) zorunludur. Aşağıdaki QR kodu telefonunuzdaki kimlik doğrulama uygulamasıyla (Google Authenticator vb.) tarayın:<br><b>${esc(email)}</b></p>
           <div class="qr-frame">
             <img src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(uri)}" width="180" height="180" alt="MFA QR">
           </div>
@@ -342,26 +440,29 @@ function renderMfaEnroll(factorId, secret, uri, email) {
   };
 }
 
-function passwordModal() {
+// -----------------------------------------------------------------------------
+// Şifre Değiştirme Modalları
+// -----------------------------------------------------------------------------
+function playerPasswordModal() {
   const m = document.createElement('div');
   m.className = 'modal';
   m.innerHTML = `
     <div class="card" style="max-width:440px">
       <h2>Şifre Değiştir</h2>
-      <p class="small muted" style="margin-top:4px">En az 8 karakterlik benzersiz bir parola belirleyin.</p>
+      <p class="small muted" style="margin-top:4px">Yeni şifreniz en az 4 karakter olmalıdır.</p>
       <div class="sep"></div>
       <form id="pwChangeForm" class="grid" autocomplete="off">
         <div>
-          <label class="f">Mevcut şifre</label>
-          <input type="password" id="oldPw" autocomplete="current-password" required>
+          <label class="f">Mevcut Şifre</label>
+          <input type="password" id="pOldPw" required>
         </div>
         <div>
-          <label class="f">Yeni şifre (en az 8 karakter)</label>
-          <input type="password" id="newPw" autocomplete="new-password" minlength="8" maxlength="128" required>
+          <label class="f">Yeni Şifre</label>
+          <input type="password" id="pNewPw" minlength="4" required>
         </div>
         <div>
-          <label class="f">Yeni şifre tekrar</label>
-          <input type="password" id="againPw" autocomplete="new-password" minlength="8" maxlength="128" required>
+          <label class="f">Yeni Şifre Tekrar</label>
+          <input type="password" id="pAgainPw" minlength="4" required>
         </div>
         <div class="row" style="justify-content:flex-end;margin-top:10px">
           <button class="btn" type="button" id="pwCancel">Vazgeç</button>
@@ -377,17 +478,75 @@ function passwordModal() {
   m.querySelector('#pwChangeForm').onsubmit = e => {
     e.preventDefault();
     run(async () => {
-      const oldPw = m.querySelector('#oldPw').value;
-      const newPw = m.querySelector('#newPw').value;
-      const againPw = m.querySelector('#againPw').value;
-      if (newPw !== againPw) {
-        toast('Yeni şifreler birbirini tutmuyor.', 'bad');
-        return;
-      }
+      const oldP = m.querySelector('#pOldPw').value;
+      const newP = m.querySelector('#pNewPw').value;
+      const agnP = m.querySelector('#pAgainPw').value;
+      if (newP !== agnP) { toast('Yeni şifreler uyuşmuyor.', 'bad'); return; }
+      if (newP.length < 4) { toast('Şifre en az 4 karakter olmalı.', 'bad'); return; }
+      if (newP === DEFAULT_PASS) { toast('Geçici şifreye (123) dönemezsiniz.', 'bad'); return; }
+
+      const oldHash = await sha256Hex(oldP);
+      const newHash = await sha256Hex(newP);
+      const res = checked(await sb.rpc('player_api', {
+        payload: {
+          action: 'change_password',
+          username: playerSession.username,
+          pass_hash: oldHash,
+          new_pass_hash: newHash
+        }
+      }));
+      if (res.error) throw { code: res.error };
+      playerSession.passHash = newHash;
+      data = res;
+      m.remove();
+      toast('Şifreniz güncellendi.');
+    });
+  };
+}
+
+function adminPasswordModal() {
+  const m = document.createElement('div');
+  m.className = 'modal';
+  m.innerHTML = `
+    <div class="card" style="max-width:440px">
+      <h2>Yönetici Şifresini Değiştir</h2>
+      <p class="small muted" style="margin-top:4px">En az 8 karakterlik benzersiz bir parola belirleyin.</p>
+      <div class="sep"></div>
+      <form id="adminPwForm" class="grid" autocomplete="off">
+        <div>
+          <label class="f">Mevcut Şifre</label>
+          <input type="password" id="aOldPw" autocomplete="current-password" required>
+        </div>
+        <div>
+          <label class="f">Yeni Şifre (en az 8 karakter)</label>
+          <input type="password" id="aNewPw" autocomplete="new-password" minlength="8" maxlength="128" required>
+        </div>
+        <div>
+          <label class="f">Yeni Şifre Tekrar</label>
+          <input type="password" id="aAgainPw" autocomplete="new-password" minlength="8" maxlength="128" required>
+        </div>
+        <div class="row" style="justify-content:flex-end;margin-top:10px">
+          <button class="btn" type="button" id="aPwCancel">Vazgeç</button>
+          <button class="btn primary" type="submit">Değiştir</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(m);
+  m.onclick = e => { if (e.target === m) m.remove(); };
+  m.querySelector('#aPwCancel').onclick = () => m.remove();
+
+  m.querySelector('#adminPwForm').onsubmit = e => {
+    e.preventDefault();
+    run(async () => {
+      const oldPw = m.querySelector('#aOldPw').value;
+      const newPw = m.querySelector('#aNewPw').value;
+      const agnPw = m.querySelector('#aAgainPw').value;
+      if (newPw !== agnPw) { toast('Yeni şifreler birbirini tutmuyor.', 'bad'); return; }
       checked(await sb.auth.signInWithPassword({ email: session.user.email, password: oldPw }));
       checked(await sb.auth.updateUser({ password: newPw, current_password: oldPw }));
       m.remove();
-      toast('Şifreniz başarıyla değiştirildi.');
+      toast('Yönetici şifresi güncellendi.');
     });
   };
 }
@@ -448,7 +607,7 @@ function renderAdmin() {
   `;
 
   bind('btnRefresh', () => call('read'));
-  bind('btnPw', async () => passwordModal());
+  bind('btnPw', async () => adminPasswordModal());
   bind('btnLogout', logout);
 
   document.querySelectorAll('[data-tab]').forEach(btn => {
@@ -484,6 +643,7 @@ function adminUsersTab(el, d) {
               <th>#</th>
               <th>Oyuncu</th>
               <th>Mevki</th>
+              <th>Şifre Durumu</th>
               <th>Durum</th>
               <th style="text-align:right">İşlemler</th>
             </tr>
@@ -502,6 +662,13 @@ function adminUsersTab(el, d) {
                   </select>
                 </td>
                 <td>
+                  ${m.role === 'player' ? (
+                    m.is_default_password !== false
+                      ? '<span class="chip warn"><span class="dot"></span>Geçici (123)</span>'
+                      : '<span class="chip good"><span class="dot"></span>Kendi belirledi</span>'
+                  ) : '<span class="chip good">Yönetici</span>'}
+                </td>
+                <td>
                   <span class="chip ${m.active ? (m.locked ? 'good' : '') : 'bad'}">
                     <span class="dot"></span>${m.active ? (m.locked ? 'Kesinleşti' : 'Aktif') : 'Pasif'}
                   </span>
@@ -509,9 +676,9 @@ function adminUsersTab(el, d) {
                 <td style="text-align:right">
                   ${m.role === 'player' ? `
                     ${m.locked ? `<button class="btn sm" data-action="unlock" data-id="${esc(m.uid)}">Kilidi aç</button> ` : ''}
+                    <button class="btn sm" data-action="resetPassword" data-id="${esc(m.uid)}" data-name="${esc(m.username)}" title="Şifreyi 123 yapar">Şifreyi 123'e Sıfırla</button>
                     <button class="btn sm" data-action="resetOne" data-id="${esc(m.uid)}">Oylarını sıfırla</button>
                     <button class="btn sm" data-action="rename" data-id="${esc(m.uid)}" data-name="${esc(m.username)}" data-mevki="${esc(m.mevki)}">Adı değiştir</button>
-                    <button class="btn sm" data-action="linkAccount" data-id="${esc(m.uid)}">Hesap bağla</button>
                     <button class="btn sm danger" data-action="deactivate" data-id="${esc(m.uid)}">Pasifleştir</button>
                   ` : '<span class="chip good">Yönetici</span>'}
                 </td>
@@ -523,16 +690,12 @@ function adminUsersTab(el, d) {
     </div>
 
     <div class="card">
-      <h2>Oyuncu Ekle / Güncelle</h2>
-      <p class="small muted" style="margin-top:4px">Kadro ve mevki değişiklikleri ilk oy verilene kadar yapılabilir.</p>
+      <h2>Yeni Oyuncu Ekle</h2>
+      <p class="small muted" style="margin-top:4px">Oyuncu ilk oluşturulduğunda şifresi otomatik olarak <b>123</b> olur. Oyuncu ilk girişinde kendi şifresini belirlemek zorundadır.</p>
       <div class="sep"></div>
       <form id="memberForm" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));align-items:end">
         <div>
-          <label class="f">Oyuncu Kimliği (Yeni oyuncuda boş bırakın)</label>
-          <input name="target" maxlength="128" pattern="[a-zA-Z0-9_-]+" placeholder="Otomatik üretilir">
-        </div>
-        <div>
-          <label class="f">Oyuncu Adı</label>
+          <label class="f">Oyuncu Adı (Kullanıcı Adı)</label>
           <input name="username" maxlength="60" required placeholder="ör. ahmet.yilmaz">
         </div>
         <div>
@@ -541,24 +704,11 @@ function adminUsersTab(el, d) {
             ${positions.map(p => `<option value="${p}">${p}</option>`).join('')}
           </select>
         </div>
-        <button class="btn primary" type="submit">Kaydet</button>
-      </form>
-    </div>
-
-    <div class="card">
-      <h2>Doğrulanmış Hesabı Oyuncuya Bağla</h2>
-      <p class="small muted" style="margin-top:4px">Oyuncunun Supabase Auth üzerinden oluşturduğu e-posta hesabını oyuncu kimliğiyle eşleştirin.</p>
-      <div class="sep"></div>
-      <form id="linkAccountForm" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));align-items:end">
         <div>
-          <label class="f">Oyuncu Kimliği (UID)</label>
-          <input name="target" required placeholder="ör. u_xxxx veya UUID">
+          <label class="f">Geçici Şifre</label>
+          <input type="text" value="123" readonly class="mono" style="background:var(--chip)">
         </div>
-        <div>
-          <label class="f">Doğrulanmış E-posta</label>
-          <input name="email" type="email" required placeholder="oyuncu@example.com">
-        </div>
-        <button class="btn primary" type="submit">Hesabı Bağla</button>
+        <button class="btn primary" type="submit">Oyuncu Ekle</button>
       </form>
     </div>
   `;
@@ -568,16 +718,8 @@ function adminUsersTab(el, d) {
     const f = new FormData(e.currentTarget);
     run(async () => {
       await call('member', Object.fromEntries(f));
-      toast('Oyuncu kaydedildi.');
-    });
-  };
-
-  document.getElementById('linkAccountForm').onsubmit = e => {
-    e.preventDefault();
-    const f = new FormData(e.currentTarget);
-    run(async () => {
-      await call('linkAccount', Object.fromEntries(f));
-      toast('Hesap başarıyla bağlandı.');
+      toast('Oyuncu eklendi (şifre: 123).');
+      e.currentTarget.reset();
     });
   };
 
@@ -587,6 +729,16 @@ function adminUsersTab(el, d) {
       const mem = members.find(m => m.uid === target);
       await call('member', { target, username: mem ? mem.username : '', mevki: sel.value });
       toast('Mevki güncellendi.');
+    });
+  });
+
+  el.querySelectorAll('[data-action="resetPassword"]').forEach(b => {
+    b.onclick = () => run(async () => {
+      const name = b.dataset.name;
+      if (confirm(`${name} oyuncusunun şifresi '123' olarak sıfırlansın mı?\nOyuncu ilk girişinde tekrar şifre belirlemek zorunda kalacaktır.`)) {
+        await call('resetPassword', { target: b.dataset.id });
+        toast(`${name} şifresi 123 olarak sıfırlandı.`);
+      }
     });
   });
 
@@ -626,16 +778,6 @@ function adminUsersTab(el, d) {
       if (!yeni || !yeni.trim() || yeni === current) return;
       await call('member', { target, username: yeni.trim(), mevki });
       toast('İsim güncellendi.');
-    });
-  });
-
-  el.querySelectorAll('[data-action="linkAccount"]').forEach(b => {
-    b.onclick = () => run(async () => {
-      const target = b.dataset.id;
-      const email = prompt('Bu oyuncu için bağlanacak doğrulanmış e-posta adresi:');
-      if (!email || !email.trim()) return;
-      await call('linkAccount', { target, email: email.trim() });
-      toast('Hesap başarıyla bağlandı.');
     });
   });
 }
@@ -1120,10 +1262,11 @@ function adminSettingsTab(el, d) {
       <div class="sep"></div>
       <div class="kv">
         <b>Depolama</b><span>Supabase (PostgreSQL + PostgREST + RPC)</span>
-        <b>Erişim Kontrolü</b><span>Row Level Security (RLS) + secure_api()</span>
+        <b>Erişim Kontrolü</b><span>Row Level Security (RLS) + secure_api() + player_api()</span>
         <b>Mevkiler</b><span>${positions.join(' · ')}</span>
         <b>Puan Skalası</b><span>1 – 10 (Tam Sayı)</span>
-        <b>MFA Kuralı</b><span>Okuma için 60 dk, değişiklikler için 10 dk TOTP tazeliği şarttır</span>
+        <b>Oyuncu Geçici Şifresi</b><span>123 (İlk girişte zorunlu değiştirilir)</span>
+        <b>MFA Kuralı</b><span>Yönetici için okuma 60 dk, değişiklikler için 10 dk TOTP tazeliği şarttır</span>
       </div>
     </div>
   `;
@@ -1189,7 +1332,7 @@ function openEnrollModal(factorId, secret, uri) {
 }
 
 // -----------------------------------------------------------------------------
-// Oyuncu Paneli
+// Oyuncu Paneli (Player View)
 // -----------------------------------------------------------------------------
 function renderPlayer() {
   const d = data;
@@ -1250,14 +1393,14 @@ function renderPlayer() {
     <div id="playerBody"></div>
   `;
 
-  bind('btnPlayerRefresh', () => call('read'));
-  bind('btnPlayerPw', async () => passwordModal());
+  bind('btnPlayerRefresh', () => callPlayer('read'));
+  bind('btnPlayerPw', async () => playerPasswordModal());
   bind('btnPlayerLogout', logout);
 
   const selMevki = document.getElementById('playerMevki');
   if (selMevki) {
     selMevki.onchange = () => run(async () => {
-      await call('position', { mevki: selMevki.value });
+      await callPlayer('position', { mevki: selMevki.value });
       toast('Mevkiniz güncellendi.');
     });
   }
@@ -1266,7 +1409,7 @@ function renderPlayer() {
   if (btnFin) {
     btnFin.onclick = () => run(async () => {
       if (confirm('Kaydedilmiş oylarınız kesinleşecek ve bir daha değiştirilemeyecektir. Devam edilsin mi?')) {
-        await call('finalize');
+        await callPlayer('finalize');
         toast('Oylarınız kesinleşti!');
       }
     });
@@ -1274,13 +1417,11 @@ function renderPlayer() {
 
   const pBody = document.getElementById('playerBody');
 
-  // Sonuç ekranı (Kilitli veya oylama kapalı ise)
   if (isLocked || !isOpen) {
     renderPlayerResults(pBody, d);
     return;
   }
 
-  // Aktif Oylama Kartları
   pBody.innerHTML = `
     <div class="card">
       <h2>Oylama Rehberi</h2>
@@ -1332,7 +1473,6 @@ function renderPlayer() {
     }).join('')}
   `;
 
-  // Puan butonlarına basıldığında
   pBody.querySelectorAll('.sc').forEach(b => {
     b.onclick = () => run(async () => {
       const target = b.dataset.target;
@@ -1341,12 +1481,11 @@ function renderPlayer() {
       const ta = card ? card.querySelector('.cmt') : null;
       const aciklama = ta ? ta.value.trim() : '';
 
-      await call('vote', { target, puan, aciklama });
+      await callPlayer('vote', { target, puan, aciklama });
       toast('Değerlendirme kaydedildi.');
     });
   });
 
-  // Açıklama değiştiğinde
   pBody.querySelectorAll('.cmt').forEach(ta => {
     ta.setAttribute('data-orig', ta.value);
     ta.onblur = () => {
@@ -1354,9 +1493,9 @@ function renderPlayer() {
       const yeni = ta.value.trim();
       if (yeni === (ta.getAttribute('data-orig') || '').trim()) return;
       const v = myVotes[target] || {};
-      if (!v.puan) return; // Önce puan verilmeli
+      if (!v.puan) return;
       run(async () => {
-        await call('vote', { target, puan: v.puan, aciklama: yeni });
+        await callPlayer('vote', { target, puan: v.puan, aciklama: yeni });
         ta.setAttribute('data-orig', yeni);
         toast('Açıklama kaydedildi.');
       });
@@ -1473,11 +1612,13 @@ function renderPlayerResults(el, d) {
 // Başlatma
 // -----------------------------------------------------------------------------
 sb.auth.onAuthStateChange((event, newSession) => {
-  session = newSession;
-  if (event === 'SIGNED_OUT') {
-    ++authEpoch;
-    data = null;
-    login();
+  if (session && session.type === 'admin') {
+    session = newSession ? { type: 'admin', user: newSession.user } : null;
+    if (event === 'SIGNED_OUT') {
+      ++authEpoch;
+      data = null;
+      login();
+    }
   }
 });
 
