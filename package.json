@@ -1,0 +1,1 @@
+{"name":"hali-saha","private":true,"type":"module","scripts":{"dev":"vite --host 127.0.0.1","build":"vite build","test":"node --test tests/*.test.cjs","check":"node --check functions/index.js && node --check src/main.js && npm test && npm run build"},"dependencies":{"firebase":"12.19.0"},"devDependencies":{"vite":"8.3.0"},"engines":{"node":">=22.12.0"}}
