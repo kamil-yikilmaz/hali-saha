@@ -40,7 +40,7 @@ where u.id = 'DOGRULANMIS_AUTH_UUID'::uuid
 
 ## Auth ayarları
 
-Auth'ta en az 14 karakter parola politikası, e-posta doğrulama, uygun giriş/yenileme kotaları yapılandırılmalıdır. Ücretsiz plana dahil olmayan korumaların açık olduğu varsayılmaz. Herkese açık kayıt gerekmiyorsa yeni kullanıcı kaydını kapat. CAPTCHA ancak proje sahibinin sağlayıcı anahtarlarıyla kurulabilir; kurulmadan etkin olduğu iddia edilmez. Oyuncu MFA kurduysa API AAL1 oturumunu kabul etmez.
+Auth'ta en az 8 karakter parola politikası, e-posta doğrulama, uygun giriş/yenileme kotaları yapılandırılmalıdır. Ücretsiz plana dahil olmayan korumaların açık olduğu varsayılmaz. Herkese açık kayıt gerekmiyorsa yeni kullanıcı kaydını kapat. CAPTCHA ancak proje sahibinin sağlayıcı anahtarlarıyla kurulabilir; kurulmadan etkin olduğu iddia edilmez. Oyuncu MFA kurduysa API AAL1 oturumunu kabul etmez.
 
 Parola değiştirme mevcut parolayla yeniden doğrulamayı gerektirir; UI minimumu tek başına Auth sunucusu politikasının yerine geçmez. Şifre sıfırlama/davet akışı SMTP hazır olana kadar yönetici kontrollüdür. Uygulama e-posta gönderimini kendiliğinden başlatmaz.
 
@@ -65,3 +65,7 @@ Eski herkese açık politikaları geri getirme. Hata varsa güvenli bakım/giri�
 - Herkese açık kayıt kapatıldı; e-posta doğrulama açık kaldı. Auth minimum parola uzunluğu 14, güvenli parola değişikliği ve mevcut parola gereksinimi etkinleştirildi.
 - Auth hesabı ve hesap eşleştirmesi sayısı kurulum sırasında sıfırdı. İlk yönetici hesabı oluşturulmadan gerçek giriş/MFA uçtan uca testi tamamlanamaz.
 - Sızmış parola kontrolü Pro plan gerektiriyor; etkinleştirilmedi. CAPTCHA sağlayıcı anahtarları ve özel SMTP kurulmadı.
+
+## Kullanıcı tercihi — parola sınırı
+
+Uygulamadaki yeni parola alanlarının minimumu 8 karakter olarak güncellendi. Canlı Auth politikası da 8 karaktere indirilecek; bu son ayarın kaydı ayrı doğrulanmalıdır. MFA ve mevcut parola doğrulaması korunur.
