@@ -291,3 +291,7 @@ Aşağıdakiler bu belge hazırlanırken çalıştırılmış testler değildir;
 | Yayın çıktısında şifre özeti veya ayrıcalıklı sır taraması | Hiçbir eşleşme olmamalıdır. |
 
 **Tamamlanma ölçütü:** Yeni kodun yazılması tek başına yeterli değildir. Authentication ayarları, API, canlı kurallar ve yayın ayarları uygulanıp bu testler geçmeden sistem güvenli yayına hazır olarak işaretlenmez.
+
+## 22 Eylül 2026 güvenlik güncellemesi
+
+Eski Firebase/istemcide parola kontrolü önerileri artık geçerli değildir. Güncel uygulama Supabase Auth ve sunucuda PostgreSQL RPC yetkilendirmesi kullanır. Kurulum ve sınırlamalar için `SECURITY-SETUP.md` esas alınmalıdır.

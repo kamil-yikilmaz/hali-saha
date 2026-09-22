@@ -1,0 +1,2 @@
+export const SUPABASE_URL="https://gbnmupfoqroktxirczit.supabase.co";
+export const SUPABASE_PUBLISHABLE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdibm11cGZvcXJva3R4aXJjeml0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAwNjk4MjIsImV4cCI6MjEwNTY0NTgyMn0.MFERAA8gNWiH7BfXvZwtzGioXBiav2bIA6ebafe3BHg";
