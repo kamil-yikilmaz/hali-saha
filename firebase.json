@@ -1,0 +1,1 @@
+{"functions":[{"source":"functions","codebase":"hali-saha-secure","ignore":["node_modules","*.local",".env*","*-debug.log"]}],"database":{"rules":"database.rules.json"}}

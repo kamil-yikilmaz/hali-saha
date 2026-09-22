@@ -1,0 +1,5 @@
+const {test}=require('node:test');const assert=require('node:assert/strict');const {migrate}=require('../scripts/migrate-legacy.cjs');
+const legacy=()=>({admins:{admin:{passHash:'secret'}},users:{old1:{username:'Ali',mevki:'Kaleci',passHash:'secret'},old2:{username:'Bora',mevki:'Defans',passHash:'secret'}},votes:{old1:{old2:{puan:8,aciklama:'İyi',ts:123}}}});
+test('migration preserves vote and profile while excluding all password data',()=>{const s=migrate(legacy(),{old1:'auth1',old2:'auth2'});assert.equal(s.votes.auth1.auth2.puan,8);assert.equal(s.config.votingOpen,false);assert.equal(JSON.stringify(s).includes('secret'),false);assert.equal(s.admins,undefined);});
+test('migration refuses missing or duplicate mappings',()=>{assert.throws(()=>migrate(legacy(),{old1:'auth1'}));assert.throws(()=>migrate(legacy(),{old1:'auth1',old2:'auth1'}));});
+test('migration refuses silent loss of unscored comments',()=>{const old=legacy();old.votes.old1.old2.puan=0;assert.throws(()=>migrate(old,{old1:'a',old2:'b'}));});
