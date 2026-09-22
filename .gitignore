@@ -6,3 +6,4 @@ dist/
 *.export.json
 identity-map.json
 supabase/.temp/
+hali-saha-test/
