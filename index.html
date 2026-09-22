@@ -180,16 +180,8 @@
 
 <script>
 /* ============================================================================
-   Personel Oylama Sistemi — tek dosya, bağımlılıksız.
-   Veri modeli birebir Firebase Realtime Database JSON ağacıdır:
-
-   {
-     "config":  { "votingOpen": true, "title": "..." },
-     "admins":  { "admin": { "username":"admin", "passHash":"<sha256>" } },
-     "users":   { "<uid>": { "username":"ahmet", "passHash":"<sha256>",
-                             "mevki":"Uzman", "createdAt": 1757... } },
-     "votes":   { "<oyVerenUid>": { "<oyAlanUid>": 7 } }
-   }
+   Halı Saha Oyuncu Oylama Sistemi — Supabase (PostgreSQL + PostgREST)
+   Tablolar: app_config, players, votes, player_results (view)
    ========================================================================== */
 
 /* ---------------------------------------------------------------- SHA-256 */
@@ -241,11 +233,12 @@ function hashPass(p){
 }
 
 /* ------------------------------------------------------- Veri katmanı (DB) */
-var LS_CFG  = 'pos_dbcfg_v1';
-var LS_DEMO = 'pos_demo_v1';
+var LS_CFG  = 'pos_sbcfg_v2';
+var LS_DEMO = 'pos_demo_v2';
 var LS_THEME= 'pos_theme';
 
-var DEFAULT_URL = 'https://halisaha-8913e-default-rtdb.europe-west1.firebasedatabase.app';
+var DEFAULT_URL = 'https://gbnmupfoqroktxirczit.supabase.co';
+var DEFAULT_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdibm11cGZvcXJva3R4aXJjeml0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAwNjk4MjIsImV4cCI6MjEwNTY0NTgyMn0.MFERAA8gNWiH7BfXvZwtzGioXBiav2bIA6ebafe3BHg';
 
 /* Mevkiler — sıralama bu dizideki sıraya göre (kaleden ileriye) yapılır */
 var MEVKILER = ['Kaleci','Defans','Orta Saha','Forvet'];
@@ -264,9 +257,9 @@ function mevkiSira(m){
 }
 
 var DB = {
-  mode: 'firebase',      // 'demo' | 'firebase'
-  url: DEFAULT_URL,      // https://<proje>-default-rtdb.<bolge>.firebasedatabase.app
-  secret: '',            // opsiyonel database secret / ID token
+  mode: 'supabase',      // 'demo' | 'supabase'
+  url: DEFAULT_URL,      // https://<proje>.supabase.co
+  key: DEFAULT_KEY,      // anon public key
   mem: null              // demo modunda bellekteki JSON ağacı
 };
 
@@ -278,8 +271,8 @@ function loadCfg(){
     var c = JSON.parse(lsGet(LS_CFG)||'null');
     if(c && c.mode){
       DB.mode = c.mode;
-      DB.url  = c.url || (c.mode==='firebase' ? DEFAULT_URL : '');
-      DB.secret = c.secret || '';
+      DB.url  = c.url || (c.mode==='supabase' ? DEFAULT_URL : '');
+      DB.key  = c.key || (c.mode==='supabase' ? DEFAULT_KEY : '');
     }
   }catch(e){}
   loadDemoMem();
@@ -289,16 +282,30 @@ function loadDemoMem(){
   if(!DB.mem) DB.mem = {};
 }
 function saveCfg(){
-  lsSet(LS_CFG, JSON.stringify({mode:DB.mode, url:DB.url, secret:DB.secret}));
+  lsSet(LS_CFG, JSON.stringify({mode:DB.mode, url:DB.url, key:DB.key}));
 }
 function persistDemo(){ lsSet(LS_DEMO, JSON.stringify(DB.mem||{})); }
 
-function fbUrl(path){
-  var base = DB.url.replace(/\/+$/,'');
-  var p = String(path||'').replace(/^\/+|\/+$/g,'');
-  var q = DB.secret ? ('?auth='+encodeURIComponent(DB.secret)) : '';
-  return base + '/' + (p ? p+'.json' : '.json') + q;
+function sbHeaders(){
+  return {
+    'apikey': DB.key,
+    'Authorization': 'Bearer ' + DB.key,
+    'Content-Type': 'application/json'
+  };
 }
+function sbBase(){
+  return DB.url.replace(/\/+$/,'') + '/rest/v1/';
+}
+async function sbError(r, islem){
+  var detay = '';
+  try{
+    var t = await r.text();
+    var j = JSON.parse(t);
+    detay = j && (j.message || j.error || j.hint) ? (j.message || j.error) : t.slice(0,120);
+  }catch(e){}
+  return new Error('Supabase '+islem+' hatası ('+r.status+(detay?': '+detay:'')+')');
+}
+
 function memRef(path, create){
   var parts = String(path||'').split('/').filter(Boolean);
   if(!DB.mem) DB.mem = {};
@@ -313,50 +320,219 @@ function memRef(path, create){
   return {parent:node, key:parts[parts.length-1]};
 }
 
-async function fbError(r, islem){
-  var detay = '';
-  try{
-    var t = await r.text();
-    var j = JSON.parse(t);
-    detay = j && j.error ? String(j.error) : t.slice(0,120);
-  }catch(e){}
-  if(r.status===401 || r.status===403 || /permission denied/i.test(detay)){
-    return new Error('Firebase izin vermedi. Realtime Database → Kurallar bölümünden okuma/yazma iznini açın '+
-                     'ya da "Veritabanı" penceresindeki Auth alanına database secret girin.');
-  }
-  return new Error('Firebase '+islem+' hatası ('+r.status+(detay?': '+detay:'')+')');
-}
-
 async function dbRead(path){
-  if(DB.mode==='firebase'){
-    var r = await fetch(fbUrl(path), {method:'GET'});
-    if(!r.ok) throw await fbError(r,'okuma');
-    return await r.json();
+  if(DB.mode==='supabase'){
+    var h = sbHeaders();
+    var [cRes, pRes, vRes] = await Promise.all([
+      fetch(sbBase() + 'app_config?select=*', { headers: h }),
+      fetch(sbBase() + 'players?select=*', { headers: h }),
+      fetch(sbBase() + 'votes?select=*', { headers: h })
+    ]);
+    if(!cRes.ok) throw await sbError(cRes, 'ayar okuma');
+    if(!pRes.ok) throw await sbError(pRes, 'oyuncuları okuma');
+    if(!vRes.ok) throw await sbError(vRes, 'oyları okuma');
+
+    var cfg = await cRes.json();
+    var players = await pRes.json();
+    var votesData = await vRes.json();
+
+    var configObj = (cfg && cfg[0]) ? { votingOpen: cfg[0].voting_open } : { votingOpen: true };
+    var adminsObj = {};
+    var usersObj = {};
+    players.forEach(function(p){
+      if(p.is_admin){
+        adminsObj[p.id] = { uid: p.id, username: p.username, passHash: p.pass_hash };
+      }else{
+        usersObj[p.id] = {
+          uid: p.id,
+          username: p.username,
+          mevki: p.mevki,
+          passHash: p.pass_hash,
+          oylamaKilidi: p.oylama_kilidi ? new Date(p.oylama_kilidi).getTime() : 0,
+          createdAt: p.created_at ? new Date(p.created_at).getTime() : 0
+        };
+      }
+    });
+
+    var votesObj = {};
+    votesData.forEach(function(v){
+      if(!votesObj[v.voter_id]) votesObj[v.voter_id] = {};
+      votesObj[v.voter_id][v.target_id] = {
+        puan: v.score,
+        aciklama: v.comment || '',
+        ts: v.updated_at ? new Date(v.updated_at).getTime() : 0
+      };
+    });
+
+    return { config: configObj, admins: adminsObj, users: usersObj, votes: votesObj };
   }
+
+  // Demo mod
   if(!path) return DB.mem || {};
   var ref = memRef(path,false);
   if(!ref) return null;
   var v = ref.parent[ref.key];
   return (v===undefined) ? null : JSON.parse(JSON.stringify(v));
 }
+
 async function dbWrite(path, value){
-  if(DB.mode==='firebase'){
-    var r = await fetch(fbUrl(path), {method:'PUT', headers:{'Content-Type':'application/json'},
-                                      body: JSON.stringify(value)});
-    if(!r.ok) throw await fbError(r,'yazma');
-    return true;
+  if(DB.mode==='supabase'){
+    var h = sbHeaders();
+    if(path==='config/votingOpen'){
+      var r = await fetch(sbBase()+'app_config?id=eq.global', {
+        method:'PATCH', headers:h,
+        body: JSON.stringify({ voting_open: Boolean(value), updated_at: new Date().toISOString() })
+      });
+      if(!r.ok) throw await sbError(r, 'oylama durumu güncelleme');
+      return true;
+    }
+    if(path==='config'){
+      var r = await fetch(sbBase()+'app_config?id=eq.global', {
+        method:'PATCH', headers:h,
+        body: JSON.stringify({ voting_open: value.votingOpen !== false, updated_at: new Date().toISOString() })
+      });
+      if(!r.ok) throw await sbError(r, 'ayar güncelleme');
+      return true;
+    }
+    if(path.startsWith('users/') && path.endsWith('/mevki')){
+      var id = path.split('/')[1];
+      var r = await fetch(sbBase()+'players?id=eq.'+id, {
+        method:'PATCH', headers:h, body: JSON.stringify({ mevki: value })
+      });
+      if(!r.ok) throw await sbError(r, 'mevki güncelleme');
+      return true;
+    }
+    if(path.startsWith('users/') && path.endsWith('/username')){
+      var id = path.split('/')[1];
+      var r = await fetch(sbBase()+'players?id=eq.'+id, {
+        method:'PATCH', headers:h, body: JSON.stringify({ username: value })
+      });
+      if(!r.ok) throw await sbError(r, 'kullanıcı adı güncelleme');
+      return true;
+    }
+    if(path.startsWith('users/') && path.endsWith('/passHash')){
+      var id = path.split('/')[1];
+      var r = await fetch(sbBase()+'players?id=eq.'+id, {
+        method:'PATCH', headers:h, body: JSON.stringify({ pass_hash: value })
+      });
+      if(!r.ok) throw await sbError(r, 'şifre güncelleme');
+      return true;
+    }
+    if(path.startsWith('users/') && path.endsWith('/oylamaKilidi')){
+      var id = path.split('/')[1];
+      var r = await fetch(sbBase()+'players?id=eq.'+id, {
+        method:'PATCH', headers:h,
+        body: JSON.stringify({ oylama_kilidi: value ? new Date(value).toISOString() : null })
+      });
+      if(!r.ok) throw await sbError(r, 'kilit güncelleme');
+      return true;
+    }
+    if(path.startsWith('users/')){
+      var id = path.split('/')[1];
+      var pData = {
+        username: value.username,
+        pass_hash: value.passHash,
+        mevki: value.mevki,
+        is_admin: false
+      };
+      if(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)){
+        pData.id = id;
+      }
+      var r = await fetch(sbBase()+'players', {
+        method:'POST', headers:h, body: JSON.stringify(pData)
+      });
+      if(!r.ok) throw await sbError(r, 'oyuncu ekleme');
+      return true;
+    }
+    if(path==='users' && typeof value==='object'){
+      var arr = Object.keys(value).map(function(k){
+        var v = value[k];
+        return { username: v.username, pass_hash: v.passHash, mevki: v.mevki, is_admin: false };
+      });
+      var r = await fetch(sbBase()+'players', {
+        method:'POST', headers:h, body: JSON.stringify(arr)
+      });
+      if(!r.ok) throw await sbError(r, 'toplu oyuncu ekleme');
+      return true;
+    }
+    if(path.startsWith('votes/')){
+      var parts = path.split('/');
+      var voter = parts[1], target = parts[2];
+      var r = await fetch(sbBase()+'votes?on_conflict=voter_id,target_id', {
+        method:'POST',
+        headers: Object.assign({}, h, { 'Prefer': 'resolution=merge-duplicates' }),
+        body: JSON.stringify({
+          voter_id: voter,
+          target_id: target,
+          score: value.puan,
+          comment: value.aciklama || '',
+          updated_at: new Date().toISOString()
+        })
+      });
+      if(!r.ok) throw await sbError(r, 'oy kaydetme');
+      return true;
+    }
+    if(path.startsWith('admins/') && path.endsWith('/passHash')){
+      var key = path.split('/')[1];
+      var r = await fetch(sbBase()+'players?is_admin=eq.true', {
+        method:'PATCH', headers:h, body: JSON.stringify({ pass_hash: value })
+      });
+      if(!r.ok) throw await sbError(r, 'yönetici şifresi güncelleme');
+      return true;
+    }
+    if(path.startsWith('admins/')){
+      return true;
+    }
+    if(!path){
+      return true;
+    }
   }
+
+  // Demo mod
   if(!path){ DB.mem = value||{}; persistDemo(); return true; }
   var ref = memRef(path,true);
   ref.parent[ref.key] = value;
   persistDemo(); return true;
 }
+
 async function dbDelete(path){
-  if(DB.mode==='firebase'){
-    var r = await fetch(fbUrl(path), {method:'DELETE'});
-    if(!r.ok) throw await fbError(r,'silme');
-    return true;
+  if(DB.mode==='supabase'){
+    var h = sbHeaders();
+    if(path==='votes'){
+      var r = await fetch(sbBase()+'votes?id=not.is.null', { method:'DELETE', headers:h });
+      if(!r.ok) throw await sbError(r, 'oyları silme');
+      return true;
+    }
+    if(path.startsWith('votes/')){
+      var parts = path.split('/');
+      var id = parts[1];
+      var r = await fetch(sbBase()+'votes?voter_id=eq.'+id, { method:'DELETE', headers:h });
+      if(!r.ok) throw await sbError(r, 'oyuncunun oylarını silme');
+      return true;
+    }
+    if(path==='users'){
+      await fetch(sbBase()+'votes?id=not.is.null', { method:'DELETE', headers:h });
+      var r = await fetch(sbBase()+'players?is_admin=eq.false', { method:'DELETE', headers:h });
+      if(!r.ok) throw await sbError(r, 'oyuncuları silme');
+      return true;
+    }
+    if(path.startsWith('users/') && path.endsWith('/oylamaKilidi')){
+      var id = path.split('/')[1];
+      var r = await fetch(sbBase()+'players?id=eq.'+id, {
+        method:'PATCH', headers:h, body: JSON.stringify({ oylama_kilidi: null })
+      });
+      if(!r.ok) throw await sbError(r, 'kilit kaldırma');
+      return true;
+    }
+    if(path.startsWith('users/')){
+      var id = path.split('/')[1];
+      var r = await fetch(sbBase()+'players?id=eq.'+id, { method:'DELETE', headers:h });
+      if(!r.ok) throw await sbError(r, 'oyuncu silme');
+      return true;
+    }
   }
+
+  // Demo mod
   var ref = memRef(path,false);
   if(ref) delete ref.parent[ref.key];
   persistDemo(); return true;
@@ -395,14 +571,6 @@ function votingOpen(){ return !(S.data.config && S.data.config.votingOpen===fals
 async function refresh(){
   var all = await dbRead('');
   S.data = all || {};
-  if(!S.data.admins){
-    await dbWrite('admins/admin', {username:'admin', passHash:hashPass('admin123')});
-    S.data.admins = {admin:{username:'admin', passHash:hashPass('admin123')}};
-  }
-  if(!S.data.config){
-    await dbWrite('config', {votingOpen:true});
-    S.data.config = {votingOpen:true};
-  }
 }
 
 /* -------------------------------------------------------- Sonuç hesabı */
@@ -495,15 +663,15 @@ function render(){
   var b = document.getElementById('banner');
   if(S.dbError && yonetici){
     b.hidden = false;
-    b.innerHTML = '<div class="note bad-note"><b>Firebase bağlantısı kurulamadı.</b><br>'+esc(S.dbError)+
+    b.innerHTML = '<div class="note bad-note"><b>Supabase bağlantısı kurulamadı.</b><br>'+esc(S.dbError)+
       '<div class="row" style="margin-top:10px">'+
         '<button class="btn sm" id="bn_retry">Tekrar dene</button>'+
         '<button class="btn sm" id="bn_set">Veritabanı ayarları</button>'+
       '</div>'+
-      '<div class="tiny" style="margin-top:8px">Şu an demo modunda (tarayıcı içi JSON) çalışıyorsunuz; girilen veriler Firebase\'e yazılmaz.</div>'+
+      '<div class="tiny" style="margin-top:8px">Şu an demo modunda (tarayıcı içi JSON) çalışıyorsunuz; girilen veriler Supabase\'e yazılmaz.</div>'+
     '</div>';
     b.querySelector('#bn_retry').onclick = async function(){
-      DB.mode='firebase'; DB.url = DB.url || DEFAULT_URL; saveCfg(); await boot();
+      DB.mode='supabase'; DB.url = DB.url || DEFAULT_URL; DB.key = DB.key || DEFAULT_KEY; saveCfg(); await boot();
     };
     b.querySelector('#bn_set').onclick = dbModal;
   }else{ b.hidden = true; b.innerHTML=''; }
@@ -515,9 +683,9 @@ function render(){
 function updateChip(){
   var chip = document.getElementById('dbChip');
   var txt  = document.getElementById('dbChipText');
-  if(DB.mode==='firebase'){
+  if(DB.mode==='supabase'){
     chip.className='chip good';
-    txt.textContent='Firebase bağlı';
+    txt.textContent='Supabase bağlı';
   }else{
     chip.className='chip warn';
     txt.textContent='Demo modu (yerel JSON)';
@@ -1201,7 +1369,7 @@ function adminData(el){
   '<div class="card">'+
     '<div class="row" style="justify-content:space-between">'+
       '<div><h2>Veritabanı ağacı</h2>'+
-      '<p class="small muted" style="margin-top:4px">Firebase Realtime Database\'de tutulan JSON\'un birebir kopyası.</p></div>'+
+      '<p class="small muted" style="margin-top:4px">Supabase PostgreSQL üzerinde tutulan verilerin JSON dökümü.</p></div>'+
       '<div class="row">'+
         '<button class="btn sm" id="reload">Yenile</button>'+
         '<button class="btn sm" id="dl">JSON indir</button>'+
@@ -1211,24 +1379,16 @@ function adminData(el){
     '<div class="sep"></div>'+
     '<textarea id="jsonBox" rows="18" spellcheck="false"></textarea>'+
     '<div class="row" style="margin-top:12px">'+
-      '<button class="btn" id="imp">Bu JSON\'u veritabanına yaz</button>'+
-      '<span class="small muted">Dikkat: mevcut tüm veriyi değiştirir.</span>'+
+      '<span class="small muted">Veritabanı Supabase üzerinden dinamik yönetilir.</span>'+
     '</div>'+
   '</div>';
   var box = el.querySelector('#jsonBox');
   box.value = JSON.stringify(S.data, null, 2);
   el.querySelector('#reload').onclick = async function(){ await refresh(); render(); };
-  el.querySelector('#dl').onclick = function(){ download('firebase-veritabani.json', box.value); };
+  el.querySelector('#dl').onclick = function(){ download('supabase-veritabani.json', box.value); };
   el.querySelector('#cp').onclick = function(){
     try{ navigator.clipboard.writeText(box.value); toast('Kopyalandı.'); }
     catch(e){ box.select(); toast('Metni seçtim, Ctrl+C ile kopyalayın.'); }
-  };
-  el.querySelector('#imp').onclick = async function(){
-    var parsed;
-    try{ parsed = JSON.parse(box.value); }catch(e){ toast('JSON geçersiz: '+e.message,'bad'); return; }
-    if(!confirm('Veritabanının tamamı bu JSON ile değiştirilecek. Devam edilsin mi?')) return;
-    try{ await dbWrite('', parsed); await refresh(); toast('Veritabanı güncellendi.'); render(); }
-    catch(e){ toast(e.message,'bad'); }
   };
 }
 
@@ -1246,7 +1406,7 @@ function adminSettings(el){
   '<div class="card">'+
     '<h2>Sistem bilgisi</h2><div class="sep"></div>'+
     '<div class="kv">'+
-      '<b>Depolama</b><span>'+(DB.mode==='firebase'?'Firebase Realtime Database':'Demo (tarayıcı içi, aynı JSON şeması)')+'</span>'+
+      '<b>Depolama</b><span>'+(DB.mode==='supabase'?'Supabase (PostgreSQL + PostgREST)':'Demo (tarayıcı içi, yerel JSON)')+'</span>'+
       '<b>Adres</b><span class="mono">'+esc(DB.url||'—')+'</span>'+
       '<b>Şifreleme</b><span>Şifreler SHA-256 özeti olarak saklanır</span>'+
       '<b>Mevkiler</b><span>'+MEVKILER.join(' · ')+'</span>'+
@@ -1637,16 +1797,16 @@ function dbModal(){
   m.className='modal';
   m.innerHTML =
   '<div class="card">'+
-    '<h2>Veritabanı bağlantısı</h2>'+
-    '<p class="small muted" style="margin-top:4px">Firebase Realtime Database adresini girin. Boş bırakırsanız uygulama aynı JSON şemasıyla demo modunda çalışır.</p>'+
+    '<h2>Veritabanı bağlantısı (Supabase)</h2>'+
+    '<p class="small muted" style="margin-top:4px">Supabase Project URL ve Anon Key girin. Boş bırakırsanız uygulama aynı veri modeliyle demo modunda (tarayıcı içi) çalışır.</p>'+
     '<div class="sep"></div>'+
     '<div class="grid">'+
-      '<div><label class="f">Database URL</label>'+
-        '<input type="text" id="d_url" placeholder="https://projeadi-default-rtdb.europe-west1.firebasedatabase.app" value="'+esc(DB.url||DEFAULT_URL)+'"></div>'+
-      '<div><label class="f">Auth (opsiyonel: database secret veya ID token)</label>'+
-        '<input type="text" id="d_sec" placeholder="kurallar açıksa boş bırakın" value="'+esc(DB.secret)+'"></div>'+
+      '<div><label class="f">Supabase Project URL</label>'+
+        '<input type="text" id="d_url" placeholder="https://xxxx.supabase.co" value="'+esc(DB.url||DEFAULT_URL)+'"></div>'+
+      '<div><label class="f">Anon Public Key</label>'+
+        '<textarea id="d_key" rows="3" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">'+esc(DB.key||DEFAULT_KEY)+'</textarea></div>'+
     '</div>'+
-    '<div class="note" style="margin-top:14px">Test için Realtime Database kurallarını <span class="mono">{"rules":{".read":true,".write":true}}</span> yapabilirsiniz. Canlıda mutlaka kimlik doğrulamalı kural kullanın.</div>'+
+    '<div class="note" style="margin-top:14px">Supabase panelinde <b>Settings &rarr; API</b> sayfasından Project URL ve anon key değerlerini bulabilirsiniz.</div>'+
     '<div class="row" style="margin-top:16px;justify-content:flex-end">'+
       '<button class="btn" id="d_demo">Demo moduna geç</button>'+
       '<button class="btn" id="d_cancel">Vazgeç</button>'+
@@ -1657,23 +1817,24 @@ function dbModal(){
   m.onclick = function(e){ if(e.target===m) m.remove(); };
   m.querySelector('#d_cancel').onclick = function(){ m.remove(); };
   m.querySelector('#d_demo').onclick = async function(){
-    DB.mode='demo'; DB.secret=''; saveCfg();
+    DB.mode='demo'; DB.key=''; saveCfg();
     loadDemoMem();
     S.session=null; S.dbError=null; m.remove();
     await boot(); toast('Demo moduna geçildi.');
   };
   m.querySelector('#d_save').onclick = async function(){
     var u = m.querySelector('#d_url').value.trim();
-    if(!u){ toast('URL girin veya demo modunu seçin.','bad'); return; }
+    var k = m.querySelector('#d_key').value.trim();
+    if(!u || !k){ toast('URL ve Anon Key girin veya demo modunu seçin.','bad'); return; }
     if(!/^https?:\/\//.test(u)) u = 'https://'+u;
-    var prev = {mode:DB.mode, url:DB.url, secret:DB.secret};
-    DB.mode='firebase'; DB.url=u; DB.secret=m.querySelector('#d_sec').value.trim();
+    var prev = {mode:DB.mode, url:DB.url, key:DB.key};
+    DB.mode='supabase'; DB.url=u; DB.key=k;
     try{
-      await dbRead('config');
+      await dbRead('');
       saveCfg(); S.session=null; S.dbError=null; m.remove();
-      await boot(); toast('Firebase bağlantısı kuruldu.');
+      await boot(); toast('Supabase bağlantısı kuruldu.');
     }catch(e){
-      DB.mode=prev.mode; DB.url=prev.url; DB.secret=prev.secret;
+      DB.mode=prev.mode; DB.url=prev.url; DB.key=prev.key;
       toast('Bağlanılamadı: '+e.message,'bad');
     }
   };
@@ -1697,7 +1858,7 @@ async function boot(){
   try{
     await refresh();
   }catch(e){
-    if(DB.mode==='firebase'){
+    if(DB.mode==='supabase'){
       S.dbError = e.message;
       DB.mode = 'demo'; loadDemoMem();
       try{ await refresh(); }catch(e2){}
