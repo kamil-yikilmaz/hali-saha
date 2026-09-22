@@ -577,7 +577,7 @@ async function doLogin(username, pass, kind){
 /* ----- Yönetici paneli ----- */
 function renderAdmin(){
   var tabs = [['users','Kullanıcılar'],['votes','Oylama Takibi'],['results','Sonuçlar'],
-              ['comments','Açıklamalar'],['data','Veritabanı (JSON)'],['settings','Ayarlar']];
+              ['teams','Dengeli Kadro'],['comments','Açıklamalar'],['data','Veritabanı (JSON)'],['settings','Ayarlar']];
   var html = '<div class="tabs">'+ tabs.map(function(t){
     return '<button class="tab '+(S.tab===t[0]?'on':'')+'" data-t="'+t[0]+'">'+t[1]+'</button>';
   }).join('') + '</div><div id="tabBody"></div>';
@@ -589,6 +589,7 @@ function renderAdmin(){
   if(S.tab==='users') adminUsers(body);
   else if(S.tab==='votes') adminVotes(body);
   else if(S.tab==='results') adminResults(body);
+  else if(S.tab==='teams') adminTeams(body);
   else if(S.tab==='comments') adminComments(body);
   else if(S.tab==='data') adminData(body);
   else adminSettings(body);
@@ -895,17 +896,27 @@ function mevkiBloklari(R, showDetail){
     var g = gruplar[m].slice();   // R zaten ortalamaya göre sıralı
     var ort = g.filter(function(x){return x.avg!==null;});
     var gOrt = ort.length ? ort.reduce(function(a,b){return a+b.avg;},0)/ort.length : null;
+
+    // Eşitlik kuralı: 1, 2, 2, 4 standardı (genel liste ile aynı kural)
+    var mRank = 0, mPrev = null;
+    g.forEach(function(r, i){
+      if(r.avg === null){ r.mRank = null; return; }
+      if(mPrev === null || r.avg !== mPrev){ mRank = i + 1; mPrev = r.avg; }
+      r.mRank = mRank;
+    });
+
     return '<div class="mcard">'+
       '<div class="row" style="justify-content:space-between;margin-bottom:10px">'+
         mevkiChip(m)+
         '<span class="tiny muted">'+g.length+' oyuncu · ortalama '+fmt(gOrt)+'</span>'+
       '</div>'+
-      '<table class="mtbl"><tbody>'+ g.map(function(r,i){
+      '<table class="mtbl"><tbody>'+ g.map(function(r){
+        var badge = r.mRank ? '<span class="rank '+(r.mRank<=3?'r'+r.mRank:'')+'">'+r.mRank+'</span>' : '<span class="muted">—</span>';
         return '<tr>'+
-          '<td style="width:28px"><span class="rank '+(i<3?'r'+(i+1):'')+'">'+(i+1)+'</span></td>'+
+          '<td style="width:28px">'+badge+'</td>'+
           '<td><b>'+esc(r.username)+'</b></td>'+
           '<td class="num"><b>'+fmt(r.avg)+'</b></td>'+
-          (showDetail?'<td class="num muted tiny">'+r.count+'/'+r.expected+'</td>':'')+
+          '<td class="num muted tiny" title="Alınan / Beklenen Oy">'+r.count+'/'+r.expected+'</td>'+
         '</tr>';
       }).join('') +'</tbody></table>'+
     '</div>';
@@ -954,6 +965,16 @@ function adminResults(el){
       })
     }, null, 2));
   };
+
+  // CSV formül enjeksiyonu önlemi (=, +, -, @ ile başlayan metinlerin önüne tek tırnak ekleme)
+  function csvCell(val){
+    var s = String(val == null ? '' : val);
+    if(/^[=+\-@\t\r]/.test(s)){
+      s = "'" + s;
+    }
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+
   el.querySelector('#expCsv').onclick = function(){
     var rows = [['Sira','Kullanici','Mevki','Ortalama','OySayisi','Toplam','EnDusuk','EnYuksek']];
     R.forEach(function(r){
@@ -961,9 +982,163 @@ function adminResults(el){
                  r.count, r.sum, r.min===null?'':r.min, r.max===null?'':r.max]);
     });
     download('oylama-sonuclari.csv', '﻿'+rows.map(function(r){
-      return r.map(function(c){ return '"'+String(c).replace(/"/g,'""')+'"'; }).join(';');
+      return r.map(csvCell).join(';');
     }).join('\n'), 'text/csv;charset=utf-8');
   };
+}
+
+/* ----- Dengeli Takım Kurucu (Kadro Önerisi) ----- */
+function adminTeams(el){
+  var R = results(), us = users();
+  if(!us.length){
+    el.innerHTML = '<div class="card"><div class="empty">Henüz kayıtlı oyuncu yok.</div></div>';
+    return;
+  }
+  
+  var playerMap = {};
+  R.forEach(function(r){ playerMap[r.uid] = r; });
+  
+  el.innerHTML =
+  '<div class="card">'+
+    '<div class="row" style="justify-content:space-between;align-items:center">'+
+      '<div>'+
+        '<h2>Dengeli Takım Kurucu</h2>'+
+        '<p class="small muted" style="margin-top:4px">Maça katılacak oyuncuları seçin; sistem mevki ve puan ortalamalarına göre iki denk takım kursun.</p>'+
+      '</div>'+
+      '<div class="row">'+
+        '<button class="btn sm" id="tmSelectAll">Tümünü Seç / Temizle</button>'+
+        '<button class="btn primary sm" id="tmGenerate">Dengeli Takımları Kur</button>'+
+      '</div>'+
+    '</div>'+
+    '<div class="sep"></div>'+
+    '<div>'+
+      '<span class="small" style="font-weight:600;color:var(--ink-2)">Maça Katılacak Oyuncuları İşaretleyin:</span>'+
+      '<div class="row" style="gap:8px;margin-top:10px" id="tmPlayerList">'+
+        us.map(function(u){
+          var res = playerMap[u.uid] || {};
+          var scoreTxt = res.avg !== null && res.avg !== undefined ? fmt(res.avg) : '—';
+          return '<label class="chip" style="cursor:pointer;user-select:none;padding:6px 12px;font-size:13px">'+
+            '<input type="checkbox" class="tm-chk" value="'+u.uid+'" checked style="margin-right:6px;width:auto">'+
+            '<b>'+esc(u.username)+'</b> '+
+            mevkiChip(u.mevki)+
+            '<span class="tiny muted" style="margin-left:4px">★ '+scoreTxt+'</span>'+
+          '</label>';
+        }).join('')+
+      '</div>'+
+    '</div>'+
+  '</div>'+
+  '<div id="tmResults"></div>';
+
+  var selectAllState = true;
+  el.querySelector('#tmSelectAll').onclick = function(){
+    selectAllState = !selectAllState;
+    Array.prototype.forEach.call(el.querySelectorAll('.tm-chk'), function(c){ c.checked = selectAllState; });
+  };
+
+  function buildBalancedTeams(){
+    var checkedUids = [];
+    Array.prototype.forEach.call(el.querySelectorAll('.tm-chk:checked'), function(c){ checkedUids.push(c.value); });
+    if(checkedUids.length < 2){
+      toast('Takım kurmak için en az 2 oyuncu seçmelisiniz.','bad');
+      return;
+    }
+    var selectedPlayers = checkedUids.map(function(id){
+      var u = us.find(function(x){ return x.uid===id; });
+      var res = playerMap[id] || {};
+      var val = (res.avg !== null && res.avg !== undefined) ? res.avg : 5.0;
+      return {uid:u.uid, username:u.username, mevki:u.mevki, avg:res.avg, sortVal:val};
+    });
+
+    var byMevki = {};
+    MEVKILER.concat(['Diğer']).forEach(function(m){ byMevki[m] = []; });
+    selectedPlayers.forEach(function(p){
+      var m = MEVKILER.indexOf(p.mevki)>=0 ? p.mevki : 'Diğer';
+      byMevki[m].push(p);
+    });
+
+    var teamA = [], teamB = [];
+    var sumA = 0, sumB = 0;
+
+    MEVKILER.concat(['Diğer']).forEach(function(m){
+      var list = byMevki[m];
+      if(!list.length) return;
+      list.sort(function(a,b){ return b.sortVal - a.sortVal; });
+      list.forEach(function(p){
+        if(teamA.length < teamB.length){
+          teamA.push(p); sumA += p.sortVal;
+        }else if(teamB.length < teamA.length){
+          teamB.push(p); sumB += p.sortVal;
+        }else{
+          if(sumA <= sumB){ teamA.push(p); sumA += p.sortVal; }
+          else{ teamB.push(p); sumB += p.sortVal; }
+        }
+      });
+    });
+
+    var avgA = teamA.length ? (sumA / teamA.length) : 0;
+    var avgB = teamB.length ? (sumB / teamB.length) : 0;
+    var diff = Math.abs(avgA - avgB);
+
+    function teamHtml(title, color, team, tAvg){
+      return '<div class="card" style="flex:1;min-width:280px;border-top:4px solid '+color+'">'+
+        '<div class="row" style="justify-content:space-between;margin-bottom:12px">'+
+          '<div><h2 style="font-size:16px">'+title+'</h2><span class="small muted">'+team.length+' Oyuncu</span></div>'+
+          '<span class="chip good" style="font-size:13px;font-weight:700">Ort: '+fmt(tAvg)+'</span>'+
+        '</div>'+
+        '<div class="tblwrap"><table><thead><tr>'+
+          '<th>Oyuncu</th><th>Mevki</th><th class="num">Puan</th>'+
+        '</tr></thead><tbody>'+
+        team.map(function(p){
+          return '<tr>'+
+            '<td><b>'+esc(p.username)+'</b></td>'+
+            '<td>'+mevkiChip(p.mevki)+'</td>'+
+            '<td class="num"><b>'+(p.avg !== null && p.avg !== undefined ? fmt(p.avg) : '<span class="muted">—</span>')+'</b></td>'+
+          '</tr>';
+        }).join('')+
+        '</tbody></table></div>'+
+      '</div>';
+    }
+
+    var resEl = el.querySelector('#tmResults');
+    resEl.innerHTML =
+    '<div class="card" style="background:var(--panel-2);margin-top:16px">'+
+      '<div class="row" style="justify-content:space-between;align-items:center">'+
+        '<div class="row" style="gap:12px">'+
+          '<span class="chip">Seçilen: '+selectedPlayers.length+' Oyuncu</span>'+
+          '<span class="chip '+(diff<=0.3?'good':(diff<=0.7?'warn':'bad'))+'">Ortalama Farkı: '+fmt(diff)+'</span>'+
+        '</div>'+
+        '<button class="btn sm" id="tmCopy">📋 Kadroyu Kopyala (WhatsApp)</button>'+
+      '</div>'+
+    '</div>'+
+    '<div class="row" style="gap:16px;margin-top:14px;align-items:flex-start">'+
+      teamHtml('⚪ Beyaz Takım', '#5a8dff', teamA, avgA)+
+      teamHtml('🔴 Kırmızı Takım', '#f07171', teamB, avgB)+
+    '</div>';
+
+    var copyBtn = resEl.querySelector('#tmCopy');
+    if(copyBtn){
+      copyBtn.onclick = function(){
+        var text = '⚽ *HALI SAHA DENGELİ MAÇ KADROSU* ⚽\n\n' +
+          '⚪ *BEYAZ TAKIM* (Ort: ' + fmt(avgA) + ')\n' +
+          teamA.map(function(p, i){ return (i+1) + '. ' + p.username + ' (' + (p.mevki||'—') + ') - ' + (p.avg!==null?fmt(p.avg):'—'); }).join('\n') +
+          '\n\n🔴 *KIRMIZI TAKIM* (Ort: ' + fmt(avgB) + ')\n' +
+          teamB.map(function(p, i){ return (i+1) + '. ' + p.username + ' (' + (p.mevki||'—') + ') - ' + (p.avg!==null?fmt(p.avg):'—'); }).join('\n') +
+          '\n\n📊 *Denge Güç Farkı:* ' + fmt(diff);
+
+        try{
+          navigator.clipboard.writeText(text);
+          toast('Kadro panoya kopyalandı!');
+        }catch(err){
+          toast('Kopyalama başarısız oldu.','bad');
+        }
+      };
+    }
+  }
+
+  el.querySelector('#tmGenerate').onclick = buildBalancedTeams;
+  if(us.length >= 2){
+    buildBalancedTeams();
+  }
 }
 
 /* Bir oyuncuya gelen açıklamalar: [{voter, puan, aciklama}] */
@@ -1270,34 +1445,61 @@ function renderUser(){
   }else if(!others.length){
     html += '<div class="card"><div class="empty">Oylanacak başka kullanıcı yok.</div></div>';
   }else{
-    var sortedOthers = others.slice().sort(function(a,b){
-      var d = mevkiSira(a.mevki)-mevkiSira(b.mevki);
-      return d!==0 ? d : a.username.localeCompare(b.username,'tr');
+    // Mevkilere göre gruplama
+    var groups = {};
+    MEVKILER.concat(['Diğer']).forEach(function(m){ groups[m] = []; });
+    others.forEach(function(u){
+      var m = MEVKILER.indexOf(u.mevki)>=0 ? u.mevki : 'Diğer';
+      groups[m].push(u);
     });
+    Object.keys(groups).forEach(function(m){
+      groups[m].sort(function(a,b){ return a.username.localeCompare(b.username,'tr'); });
+    });
+
+    var mevkiGroupsHtml = MEVKILER.concat(['Diğer']).filter(function(m){
+      return groups[m] && groups[m].length > 0;
+    }).map(function(m){
+      return '<div style="margin-top:20px">'+
+        '<div class="row" style="gap:8px;align-items:center;margin-bottom:10px">'+
+          mevkiChip(m)+
+          '<h3 style="margin:0;font-size:14px;color:var(--ink)">'+esc(m)+' Oyuncuları <span class="muted tiny">('+groups[m].length+')</span></h3>'+
+        '</div>'+
+        '<div class="vlist">'+ groups[m].map(function(u){
+          var o = oy(myRow, u.uid), cur = o?o.puan:0, not = o?o.aciklama:'';
+          return '<div class="vcard" data-card="'+u.uid+'">'+
+            '<div class="vhead">'+
+              '<div><b>'+esc(u.username)+'</b><div style="margin-top:4px">'+mevkiChip(u.mevki)+'</div></div>'+
+              '<span class="chip vchip '+(cur?'good':'')+'">'+(cur?('Oyunuz: '+cur):'Oy yok')+'</span>'+
+            '</div>'+
+            '<div class="scale">'+ [1,2,3,4,5,6,7,8,9,10].map(function(n){
+              return '<button class="sc '+(cur===n?'on':'')+'" data-t="'+u.uid+'" data-v="'+n+'">'+n+'</button>';
+            }).join('') +'</div>'+
+            '<textarea class="cmt" data-c="'+u.uid+'" rows="2" maxlength="500" '+
+              'placeholder="'+esc(u.mevki||'Oyuncu')+' performansı hakkında açıklama (en fazla 500 karakter)">'+esc(not)+'</textarea>'+
+          '</div>';
+        }).join('') +'</div>'+
+      '</div>';
+    }).join('');
 
     html +=
     '<div class="card">'+
-      '<div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">'+
+      '<div class="row" style="justify-content:space-between;align-items:center">'+
         '<div>'+
           '<h2>Oylama</h2>'+
           '<p class="small muted" style="margin-top:4px">Oyuncuları oynadıkları mevkiye göre değerlendirip 1–10 arası puan verin. Verdiğiniz oylar anında kaydedilir.</p>'+
         '</div>'+
       '</div>'+
       '<div class="sep"></div>'+
-      '<div class="vlist">'+ sortedOthers.map(function(u){
-        var o = oy(myRow, u.uid), cur = o?o.puan:0, not = o?o.aciklama:'';
-        return '<div class="vcard" data-card="'+u.uid+'">'+
-          '<div class="vhead">'+
-            '<div><b>'+esc(u.username)+'</b><div style="margin-top:4px">'+mevkiChip(u.mevki)+'</div></div>'+
-            '<span class="chip vchip '+(cur?'good':'')+'">'+(cur?('Oyunuz: '+cur):'Oy yok')+'</span>'+
-          '</div>'+
-          '<div class="scale">'+ [1,2,3,4,5,6,7,8,9,10].map(function(n){
-            return '<button class="sc '+(cur===n?'on':'')+'" data-t="'+u.uid+'" data-v="'+n+'">'+n+'</button>';
-          }).join('') +'</div>'+
-          '<textarea class="cmt" data-c="'+u.uid+'" rows="2" maxlength="500" '+
-            'placeholder="'+esc(u.mevki||'Oyuncu')+' performansı hakkında açıklama (isteğe bağlı)">'+esc(not)+'</textarea>'+
-        '</div>';
-      }).join('') +'</div>'+
+      '<div class="note" style="background:var(--panel-2);border-left:3px solid var(--accent)">'+
+        '<b>📌 Puanlama Rehberi:</b>'+
+        '<div class="row" style="gap:14px;margin-top:6px;font-size:12.5px;color:var(--ink-2)">'+
+          '<span><b>1–3:</b> Gelişmeli / Yetersiz</span>'+
+          '<span><b>4–6:</b> Ortalama / Standart</span>'+
+          '<span><b>7–8:</b> Başarılı / İyi Katkı</span>'+
+          '<span><b>9–10:</b> Maçın Yıldızı / Çok İyi</span>'+
+        '</div>'+
+      '</div>'+
+      mevkiGroupsHtml+
     '</div>';
   }
   view.innerHTML = html;
@@ -1343,10 +1545,13 @@ function renderUser(){
     b.onclick = async function(){
       if(S.busy) return; S.busy = true;
       var t = b.getAttribute('data-t'), v = Number(b.getAttribute('data-v'));
+      if(t === me.uid || v < 1 || v > 10 || isNaN(v)){ S.busy = false; return; }
+      if(kilitli || !open){ toast('Oylamanız kapalı olduğu için oy verilemez.','bad'); S.busy = false; return; }
       var kart = view.querySelector('[data-card="'+t+'"]');
       var ta = kart ? kart.querySelector('.cmt') : null;
+      var cmtVal = ta ? ta.value.trim().slice(0, 500) : '';
       try{
-        await dbWrite('votes/'+me.uid+'/'+t, {puan:v, aciklama: ta ? ta.value.trim() : '', ts:Date.now()});
+        await dbWrite('votes/'+me.uid+'/'+t, {puan:v, aciklama: cmtVal, ts:Date.now()});
         await refresh();
         if(kart){
           Array.prototype.forEach.call(kart.querySelectorAll('.sc'), function(x){
@@ -1365,8 +1570,10 @@ function renderUser(){
     ta.setAttribute('data-ilk', ta.value);
     ta.onchange = ta.onblur = async function(){
       var yeni = ta.value.trim();
+      if(yeni.length > 500) yeni = yeni.slice(0, 500);
       if(yeni === (ta.getAttribute('data-ilk')||'').trim()) return;
       var t = ta.getAttribute('data-c');
+      if(t === me.uid || kilitli || !open) return;
       var mevcut = oy(votes()[me.uid], t);
       try{
         await dbWrite('votes/'+me.uid+'/'+t, {puan: mevcut?mevcut.puan:0, aciklama: yeni, ts:Date.now()});
