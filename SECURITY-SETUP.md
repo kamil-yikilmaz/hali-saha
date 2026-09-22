@@ -57,3 +57,11 @@ GitHub Pages özel HTTP başlıklarını yönetmez. Meta CSP kullanılır; HTTP-
 ## Geri dönüş ve yedek
 
 Eski herkese açık politikaları geri getirme. Hata varsa güvenli bakım/giriş ekranını koru. Yeni oylar geldikten sonra eski snapshot'a dönmek veri kaybettirir; önce özel durumu yedekle ve farkları uzlaştır. Düzenli şifreli PostgreSQL yedeğini repo ve herkese açık depolama dışında tut; Auth hesap/MFA kurtarmasını ayrıca planla. Ücretsiz proje duraklatma ve kota sınırları geçerlidir; sınırsız erişilebilirlik garantisi yoktur.
+
+## Canlı uygulama durumu — 22 Eylül 2026
+
+- Eski tablolardan 22 üye ve 20 oy güvenli duruma aktarıldı; kaynak kayıtlar korundu.
+- Eski herkese açık politikalar kaldırıldı; beş eski tablo/görünüm için anonim HEAD isteği ve anonim RPC çağrısı 401 ile reddedildi.
+- Herkese açık kayıt kapatıldı; e-posta doğrulama açık kaldı. Auth minimum parola uzunluğu 14, güvenli parola değişikliği ve mevcut parola gereksinimi etkinleştirildi.
+- Auth hesabı ve hesap eşleştirmesi sayısı kurulum sırasında sıfırdı. İlk yönetici hesabı oluşturulmadan gerçek giriş/MFA uçtan uca testi tamamlanamaz.
+- Sızmış parola kontrolü Pro plan gerektiriyor; etkinleştirilmedi. CAPTCHA sağlayıcı anahtarları ve özel SMTP kurulmadı.
